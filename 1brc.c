@@ -84,7 +84,7 @@ void print_results(results_t *results, void *mem);
 void debug_results(hash_t *hash);
 void print256(__m256i var);
 
-#define DEBUG 0
+#define DEBUG 1
 
 #if DEBUG
 #define D(x) x
@@ -215,7 +215,7 @@ int main(int argc, char** argv) {
     num_workers = (int) (fileStat.st_size / PAGE_SIZE) + 1;
   }
 
-  void * shared_mem = mmap(NULL, WORKER_MEMORY_SIZE * (num_workers > 3 ? num_workers : 3), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS | MAP_POPULATE, -1, 0);
+  void * shared_mem = mmap(NULL, WORKER_MEMORY_SIZE * (num_workers > 3 ? num_workers : 3), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
   prep_workers(shared_mem, num_workers, use_fork, fd, &fileStat);
 
   TIMER_INIT();
@@ -332,18 +332,8 @@ int start_worker(void *arg) {
     unsigned int mapped_file_length = last ? PAGE_CEIL(chunk_size) : chunk_size + PAGE_SIZE;
 
     TIMER_RESET();
-    mmap(data + PAGE_SIZE, mapped_file_length, PROT_READ, MAP_SHARED | MAP_FIXED | (w->fork ? MAP_POPULATE : 0), w->fd, start);
+    mmap(data + PAGE_SIZE, mapped_file_length, PROT_READ, MAP_SHARED | MAP_FIXED, w->fd, start);
     TIMER_MS("mmap");
-
-    if (!w->fork) {
-      TIMER_RESET();
-      long dummy = 0;
-      for (long i = PAGE_SIZE; i - PAGE_SIZE < mapped_file_length; i += PAGE_SIZE) {
-        dummy += *(long *)(data + i);
-      }
-      __asm__ volatile( "" : : [dummy] "r" (dummy));
-      TIMER_MS("warmup");
-    }
 
     unsigned int offsets[STRIDE + 1];
     if (first) {
