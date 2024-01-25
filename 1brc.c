@@ -132,11 +132,11 @@ void print256(__m256i var);
 #define HASH_CITY_OFFSET 5        // log2(SHORT_CITY_LENGTH)
 #define HASH_CITY_LONG_OFFSET 7   // log2(LONG_CITY_LENGTH)
 
-#define HASH_SHIFT 15              // max(desired, log2(MAX_CITIES))
-#define HASH_LONG_SHIFT 14         // max(desired, log2(MAX_CITIES))
+#define HASH_SHIFT 15              // 1 + max(desired, log2(MAX_CITIES))
+#define HASH_LONG_SHIFT 15         // 1 + max(desired, log2(MAX_CITIES))
 
-#define HASH_SHORT_MASK (((1 << HASH_SHIFT)      - 1) << MIN(HASH_DATA_OFFSET, HASH_CITY_OFFSET))
-#define HASH_LONG_MASK  (((1 << HASH_LONG_SHIFT) - 1) << HASH_CITY_LONG_OFFSET)
+#define HASH_SHORT_MASK (((1 << (HASH_SHIFT      - 1)) - 1) << MIN(HASH_DATA_OFFSET, HASH_CITY_OFFSET))
+#define HASH_LONG_MASK  (((1 << (HASH_LONG_SHIFT - 1)) - 1) << HASH_CITY_LONG_OFFSET)
 
 #define HASH_DATA_SHIFT (HASH_DATA_OFFSET - MIN(HASH_DATA_OFFSET, HASH_CITY_OFFSET))
 #define HASH_CITY_SHIFT (HASH_CITY_OFFSET - MIN(HASH_DATA_OFFSET, HASH_CITY_OFFSET))
@@ -218,6 +218,7 @@ int main(int argc, char** argv) {
   void * shared_mem = mmap(NULL, WORKER_MEMORY_SIZE * (num_workers > 3 ? num_workers : 3), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS | MAP_POPULATE, -1, 0);
   prep_workers(shared_mem, num_workers, use_fork, fd, &fileStat);
 
+  TIMER_INIT();
   if (num_workers == 1 && false) {
     start_worker((void *)get_worker(shared_mem, 0));
   }
@@ -227,14 +228,16 @@ int main(int argc, char** argv) {
   else {
     process_threads(shared_mem, num_workers);
   }
+  TIMER_MS("process");
 
+  TIMER_RESET();
   hash_t *hash = &get_worker(shared_mem, 0)->hash;
-  D(debug_results(hash));
   for (int i = 1; i < num_workers; i++) {
     merge2(hash, &get_worker(shared_mem, i)->hash);
   }
+  TIMER_US("merge2");
 
-  TIMER_INIT();
+  TIMER_RESET();
   results_t *results = sort_results(hash, (void *)get_worker(shared_mem, 2));
   TIMER_US("sort");
 
@@ -284,8 +287,6 @@ void prep_workers(void *shared, int num_workers, bool fork, int fd, struct stat 
 }
 
 void process_threads(void * shared, int num_workers) {
-  TIMER_INIT();
-
   thrd_t threads[num_workers];
   for (int i = 0; i < num_workers; i++) {
     worker_t *w = get_worker(shared, i);
@@ -295,9 +296,6 @@ void process_threads(void * shared, int num_workers) {
   for (int i = 0; i < num_workers; i++) {
     thrd_join(threads[i], NULL);
   }
-
-  TIMER_MS("done");
-  return;
 }
 
 void process_forks(void *shared, int num_workers) {
@@ -323,9 +321,6 @@ int start_worker(void *arg) {
     _mm256_store_si256(data + i, dummyData);
   }
 
-  TIMER_MS("mmap 1");
-
-
   for (long start = w->start; start < w->end; start += MAX_CHUNK_SIZE) {
 
     long end = start + MAX_CHUNK_SIZE > w->end ? w->end : start + MAX_CHUNK_SIZE;
@@ -338,7 +333,7 @@ int start_worker(void *arg) {
 
     TIMER_RESET();
     mmap(data + PAGE_SIZE, mapped_file_length, PROT_READ, MAP_SHARED | MAP_FIXED | (w->fork ? MAP_POPULATE : 0), w->fd, start);
-    TIMER_MS("mmap 2");
+    TIMER_MS("mmap");
 
     if (!w->fork) {
       TIMER_RESET();
@@ -394,6 +389,22 @@ void process_chunk(const char * const restrict base, const unsigned int * offset
   insert_city(0, hash_city(_mm256_loadu_si256((__m256i *)masked_dummy)), _mm256_loadu_si256((__m256i *)masked_dummy), h);
 
   while(1) {
+
+/*
+//    unsigned int tmp[8];
+//    memcpy(tmp, &starts_v, 32);
+    printf("\nstarting:\n");
+    for (int i = 0; i < STRIDE; i++) {
+      printf("%u ", starts[i]);
+//      printf("%u ", tmp[i]);
+    }
+    printf("\n");
+    for (int i = 0; i < STRIDE; i++) {
+      printf("%u ", ends[i]);
+    }
+    printf("\n\n");
+*/
+
     __m256i ends_v =  _mm256_load_si256((__m256i *)ends);
     __m256i at_end_mask = _mm256_cmpeq_epi32(starts_v, ends_v);
     if (unlikely(_mm256_movemask_epi8(at_end_mask))) {
@@ -650,8 +661,8 @@ __m256i process_long(const char * start, hash_t *h, int *semicolonBytesOut) {
   }
 
   int hash = hash_long(*(long *)start, *((long *)start + 1));
-  int short_hash = insert_city_long(hash, seg0, seg1, seg2, seg3, h);
-  return _mm256_slli_si256(_mm256_set1_epi32(short_hash), 4);
+  hash = insert_city_long(hash, seg0, seg1, seg2, seg3, h);
+  return _mm256_slli_si256(_mm256_set1_epi32(hash), 4);
 }
 
 __attribute__((always_inline)) inline __m256i hash_cities(__m256i a, __m256i b, __m256i c, __m256i d, __m256i e, __m256i f, __m256i g, __m256i h) {
@@ -790,20 +801,38 @@ void merge2(hash_t *a, hash_t *b) {
   for (int i = 0; i < b->num_cities; i++) {
     __m256i city = _mm256_load_si256((__m256i *)(b->packed_cities + i * SHORT_CITY_LENGTH));
     int hash = hash_city(city);
-    int b_offset  = get_offset(0, hash, city, b);
-    int a_offset = get_offset(0, hash, city, a);
-    if (likely(a_offset != -1)) {
-      *(long  *)(a->hashed_storage + a_offset +  0) += *(long  *)(b->hashed_storage + b_offset +  0);
-      *(int   *)(a->hashed_storage + a_offset +  8) += *(int   *)(b->hashed_storage + b_offset +  8);
-      *(short *)(a->hashed_storage + a_offset + 12) = MIN(*(short *)(a->hashed_storage + a_offset + 12), *(short *)(b->hashed_storage + b_offset + 12));
-      *(short *)(a->hashed_storage + a_offset + 14) = MAX(*(short *)(a->hashed_storage + a_offset + 14), *(short *)(b->hashed_storage + b_offset + 14));
+    int offsetA = get_offset(0, hash, city, a);
+    int offsetB = get_offset(0, hash, city, b);
+
+    // swizzle the pointer to the long city name
+    if (unlikely(_mm256_extract_epi32(city, 0)) == 0) {
+      int longHashB = _mm256_extract_epi32(city, 1);
+      __m256i seg0 = _mm256_loadu_si256((__m256i *)(b->hashed_cities_long + longHashB));
+      __m256i seg1 = _mm256_loadu_si256((__m256i *)(b->hashed_cities_long + longHashB) + 1);
+      __m256i seg2 = _mm256_loadu_si256((__m256i *)(b->hashed_cities_long + longHashB) + 2);
+      __m256i seg3 = _mm256_loadu_si256((__m256i *)(b->hashed_cities_long + longHashB) + 3);
+
+      int longHashA = hash_long(_mm256_extract_epi64(seg0, 0), _mm256_extract_epi64(seg0, 1));
+      longHashA = insert_city_long(longHashA, seg0, seg1, seg2, seg3, a);
+
+      city = _mm256_slli_si256(_mm256_set1_epi32(longHashA), 4);
+      hash = hash_city(city);
+      offsetA = get_offset(0, hash, city, a);
+    }
+
+    // city was already seen in A, just merge the data
+    if (likely(offsetA != -1)) {
+      *(long  *)(a->hashed_storage + offsetA +  0) += *(long  *)(b->hashed_storage + offsetB +  0);
+      *(int   *)(a->hashed_storage + offsetA +  8) += *(int   *)(b->hashed_storage + offsetB +  8);
+      *(short *)(a->hashed_storage + offsetA + 12) = MIN(*(short *)(a->hashed_storage + offsetA + 12), *(short *)(b->hashed_storage + offsetB + 12));
+      *(short *)(a->hashed_storage + offsetA + 14) = MAX(*(short *)(a->hashed_storage + offsetA + 14), *(short *)(b->hashed_storage + offsetB + 14));
     }
     else {
-      a_offset = insert_city(0, hash, city, a);
-      *(long  *)(a->hashed_storage + a_offset +  0) = *(long  *)(b->hashed_storage + b_offset +  0);
-      *(int   *)(a->hashed_storage + a_offset +  8) = *(int   *)(b->hashed_storage + b_offset +  8);
-      *(short *)(a->hashed_storage + a_offset + 12) = *(short *)(b->hashed_storage + b_offset + 12);
-      *(short *)(a->hashed_storage + a_offset + 14) = *(short *)(b->hashed_storage + b_offset + 14);
+      offsetA = insert_city(0, hash, city, a);
+      *(long  *)(a->hashed_storage + offsetA +  0) = *(long  *)(b->hashed_storage + offsetB +  0);
+      *(int   *)(a->hashed_storage + offsetA +  8) = *(int   *)(b->hashed_storage + offsetB +  8);
+      *(short *)(a->hashed_storage + offsetA + 12) = *(short *)(b->hashed_storage + offsetB + 12);
+      *(short *)(a->hashed_storage + offsetA + 14) = *(short *)(b->hashed_storage + offsetB + 14);
     }
   }
 }
