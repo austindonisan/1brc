@@ -84,7 +84,7 @@ void print_results(results_t *results, void *mem);
 void debug_results(hash_t *hash);
 void print256(__m256i var);
 
-#define DEBUG 1
+#define DEBUG 0
 
 #if DEBUG
 #define D(x) x
