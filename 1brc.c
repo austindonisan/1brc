@@ -84,8 +84,8 @@ unsigned int find_next_row(const void *data, unsigned int offset);
 void print_results(results_t *results, void *mem);
 void debug_results(hash_t *hash);
 inline int hash_to_offset(int hash, int streamIdx);
-__m256 city_from_long_hash(int hashValue);
-int long_hash_from_city(__m256 city);
+__m256i city_from_long_hash(int hashValue);
+int long_hash_from_city(__m256i city);
 void print256(__m256i var);
 
 #define DEBUG 0
@@ -984,11 +984,11 @@ void debug_results(hash_t *hash) {
   fprintf(stderr, "total: %ld\n", total);
 }
 
-__m256 city_from_long_hash(int hashValue) {
+__m256i city_from_long_hash(int hashValue) {
   return _mm256_set_epi32(0, 0, 0, 0, 0, hashValue, 0xDEADBEEF, 0);
 }
 
-int long_hash_from_city(__m256 city) {
+int long_hash_from_city(__m256i city) {
   if (_mm256_extract_epi64(city, 0) == 0xDEADBEEF00000000) {
     return _mm256_extract_epi32(city, 2);
   }
