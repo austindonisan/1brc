@@ -88,7 +88,7 @@ __m256 city_from_long_hash(int hashValue);
 int long_hash_from_city(__m256 city);
 void print256(__m256i var);
 
-#define DEBUG 1
+#define DEBUG 0
 
 #if DEBUG
 #define D(x) x
