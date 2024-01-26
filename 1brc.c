@@ -17,6 +17,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <x86intrin.h>
 
 typedef struct {
   int64_t packed_sum;
@@ -83,6 +84,8 @@ unsigned int find_next_row(const void *data, unsigned int offset);
 void print_results(results_t *results, void *mem);
 void debug_results(hash_t *hash);
 inline int hash_to_offset(int hash, int streamIdx);
+__m256 city_from_long_hash(int hashValue);
+int long_hash_from_city(__m256 city);
 void print256(__m256i var);
 
 #define DEBUG 1
@@ -616,12 +619,9 @@ void process_chunk(const char * const restrict base, const unsigned int * offset
   }
 }
 
-unsigned long rotate_long(unsigned long x) {
-  return (x << 5) | (x >> (x - 5));
-}
 int hash_long(long x, long y) {
   long seed = 0x9e3779b97f4a7c15;
-  return ((rotate_long(x * seed) ^ y) * seed) & HASH_LONG_MASK;
+  return ((_lrotl(x * seed, 5) ^ y) * seed) & HASH_LONG_MASK;
 }
 __m256i process_long(const char * start, hash_t *h, int *semicolonBytesOut) {
   __m256i seg0 = _mm256_loadu_si256((__m256i *)start);
@@ -653,7 +653,7 @@ __m256i process_long(const char * start, hash_t *h, int *semicolonBytesOut) {
 
   int hash = hash_long(*(long *)start, *((long *)start + 1));
   hash = insert_city_long(h, hash, seg0, seg1, seg2, seg3);
-  return _mm256_slli_si256(_mm256_set1_epi32(hash), 4);
+  return city_from_long_hash(hash);
 }
 
 __attribute__((always_inline)) inline __m256i hash_cities(__m256i a, __m256i b, __m256i c, __m256i d, __m256i e, __m256i f, __m256i g, __m256i h) {
@@ -794,13 +794,14 @@ void merge(hash_t *h) {
 void merge2(hash_t *a, hash_t *b) {
   for (int i = 0; i < b->num_cities; i++) {
     __m256i city = _mm256_load_si256((__m256i *)(b->packed_cities + i * SHORT_CITY_LENGTH));
-    int hash = hash_city(city);
-    int offsetA = get_offset(0, hash, city, a);
-    int offsetB = get_offset(0, hash, city, b);
+    int hashValue = hash_city(city);
+    int offsetA = get_offset(0, hashValue, city, a);
+    int offsetB = get_offset(0, hashValue, city, b);
+
+    int longHashB = long_hash_from_city(city);
 
     // swizzle the pointer to the long city name
-    if (unlikely(_mm256_extract_epi32(city, 0)) == 0) {
-      int longHashB = _mm256_extract_epi32(city, 1);
+    if (unlikely(longHashB != -1)) {
       __m256i seg0 = _mm256_loadu_si256((__m256i *)(b->hashed_cities_long + longHashB));
       __m256i seg1 = _mm256_loadu_si256((__m256i *)(b->hashed_cities_long + longHashB) + 1);
       __m256i seg2 = _mm256_loadu_si256((__m256i *)(b->hashed_cities_long + longHashB) + 2);
@@ -809,9 +810,9 @@ void merge2(hash_t *a, hash_t *b) {
       int longHashA = hash_long(_mm256_extract_epi64(seg0, 0), _mm256_extract_epi64(seg0, 1));
       longHashA = insert_city_long(a, longHashA, seg0, seg1, seg2, seg3);
 
-      city = _mm256_slli_si256(_mm256_set1_epi32(longHashA), 4);
-      hash = hash_city(city);
-      offsetA = get_offset(0, hash, city, a);
+      city = city_from_long_hash(longHashA);
+      hashValue = hash_city(city);
+      offsetA = get_offset(0, hashValue, city, a);
     }
 
     // city was already seen in A, just merge the data
@@ -822,7 +823,7 @@ void merge2(hash_t *a, hash_t *b) {
       *(short *)(a->hashed_storage + offsetA + 14) = MAX(*(short *)(a->hashed_storage + offsetA + 14), *(short *)(b->hashed_storage + offsetB + 14));
     }
     else {
-      offsetA = insert_city(a, hash, 0, city);
+      offsetA = insert_city(a, hashValue, 0, city);
       *(long  *)(a->hashed_storage + offsetA +  0) = *(long  *)(b->hashed_storage + offsetB +  0);
       *(int   *)(a->hashed_storage + offsetA +  8) = *(int   *)(b->hashed_storage + offsetB +  8);
       *(short *)(a->hashed_storage + offsetA + 12) = *(short *)(b->hashed_storage + offsetB + 12);
@@ -853,7 +854,8 @@ results_t *sort_results(hash_t *hash, void *mem) {
     r->cityLength = _tzcnt_u32(_mm256_movemask_epi8(_mm256_cmpeq_epi8(city, nullBytes)));
 
     if (unlikely(r->cityLength == 0)) {
-      int long_hash = _mm256_extract_epi32(city, 1);
+      int long_hash = long_hash_from_city(city);
+
       r->city = hash->hashed_cities_long + long_hash;
 
       __m256i seg0 = _mm256_load_si256((__m256i *)(r->city));
@@ -871,9 +873,10 @@ results_t *sort_results(hash_t *hash, void *mem) {
     int offset = get_offset(0, hash_value, city, hash);
     r->data = (result_data_t *)(hash->hashed_storage + offset);
 
-    if (unlikely(_mm256_extract_epi32(city, 0) == 0)) {
-      int long_hash = _mm256_extract_epi32(city, 1);
-      r->city = hash->hashed_cities_long + long_hash;
+    int longHash = long_hash_from_city(city);
+
+    if (unlikely(longHash != -1)) {
+      r->city = hash->hashed_cities_long + longHash;
     }
   }
   qsort(results->results, results->num_results, sizeof(result_t *), sort_result);
@@ -941,19 +944,19 @@ void debug_results(hash_t *hash) {
 
   for (int i = 0; i < MIN(10, hash->num_cities); i++) {
     __m256i city = _mm256_load_si256((__m256i *)(hash->packed_cities + i * SHORT_CITY_LENGTH));
+    int longHash = long_hash_from_city(city);
     if (i == 0) {
       strcpy(fullCity, dummyName);
     }
-    else if (_mm256_extract_epi32(city, 0) != 0) {
+    else if (longHash == -1) {
       _mm256_storeu_si256((__m256i *)fullCity, city);
       fullCity[32] = 0;
     }
     else {
-      int long_hash = _mm256_extract_epi32(city, 1);
-      __m256i seg0 = _mm256_load_si256((__m256i *)(hash->hashed_cities_long + long_hash));
-      __m256i seg1 = _mm256_load_si256((__m256i *)(hash->hashed_cities_long + long_hash) + 1);
-      __m256i seg2 = _mm256_load_si256((__m256i *)(hash->hashed_cities_long + long_hash) + 2);
-      __m256i seg3 = _mm256_load_si256((__m256i *)(hash->hashed_cities_long + long_hash) + 3);
+      __m256i seg0 = _mm256_load_si256((__m256i *)(hash->hashed_cities_long + longHash));
+      __m256i seg1 = _mm256_load_si256((__m256i *)(hash->hashed_cities_long + longHash) + 1);
+      __m256i seg2 = _mm256_load_si256((__m256i *)(hash->hashed_cities_long + longHash) + 2);
+      __m256i seg3 = _mm256_load_si256((__m256i *)(hash->hashed_cities_long + longHash) + 3);
       _mm256_storeu_si256((__m256i *)fullCity, seg0);
       _mm256_storeu_si256((__m256i *)fullCity + 1, seg1);
       _mm256_storeu_si256((__m256i *)fullCity + 2, seg2);
@@ -981,7 +984,18 @@ void debug_results(hash_t *hash) {
   fprintf(stderr, "total: %ld\n", total);
 }
 
-__attribute__((always_inline)) inline int hash_to_offset(int hash, int streamIdx) {
+__m256 city_from_long_hash(int hashValue) {
+  return _mm256_set_epi32(0, 0, 0, 0, 0, hashValue, 0xDEADBEEF, 0);
+}
+
+int long_hash_from_city(__m256 city) {
+  if (_mm256_extract_epi64(city, 0) == 0xDEADBEEF00000000) {
+    return _mm256_extract_epi32(city, 2);
+  }
+  return -1;
+}
+
+inline int hash_to_offset(int hash, int streamIdx) {
   return hash * (HASH_ENTRY_SIZE / SHORT_CITY_LENGTH) + streamIdx * sizeof(hash_entry_t);
 }
 

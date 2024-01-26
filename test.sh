@@ -1,0 +1,26 @@
+#!/bin/sh
+./1brc samples/measurements-1.txt                  1 2>/dev/null | diff - samples/measurements-1.out
+./1brc samples/measurements-1.txt                  2 2>/dev/null | diff - samples/measurements-1.out
+./1brc samples/measurements-2.txt                  1 2>/dev/null | diff - samples/measurements-2.out
+./1brc samples/measurements-2.txt                  2 2>/dev/null | diff - samples/measurements-2.out
+./1brc samples/measurements-3.txt                  1 2>/dev/null | diff - samples/measurements-3.out
+./1brc samples/measurements-3.txt                  2 2>/dev/null | diff - samples/measurements-3.out
+./1brc samples/measurements-10.txt                 1 2>/dev/null | diff - samples/measurements-10.out
+./1brc samples/measurements-10.txt                 2 2>/dev/null | diff - samples/measurements-10.out
+./1brc samples/measurements-20.txt                 1 2>/dev/null | diff - samples/measurements-20.out
+./1brc samples/measurements-20.txt                 2 2>/dev/null | diff - samples/measurements-20.out
+./1brc samples/measurements-dot.txt                1 2>/dev/null | diff - samples/measurements-dot.out
+./1brc samples/measurements-dot.txt                2 2>/dev/null | diff - samples/measurements-dot.out
+./1brc samples/measurements-short.txt              1 2>/dev/null | diff - samples/measurements-short.out
+./1brc samples/measurements-short.txt              2 2>/dev/null | diff - samples/measurements-short.out
+./1brc samples/measurements-shortest.txt           1 2>/dev/null | diff - samples/measurements-shortest.out
+./1brc samples/measurements-shortest.txt           2 2>/dev/null | diff - samples/measurements-shortest.out
+./1brc samples/measurements-rounding.txt           1 2>/dev/null | diff - samples/measurements-rounding.out
+./1brc samples/measurements-rounding.txt           2 2>/dev/null | diff - samples/measurements-rounding.out
+./1brc samples/measurements-boundaries.txt         1 2>/dev/null | diff - samples/measurements-boundaries.out
+./1brc samples/measurements-boundaries.txt         2 2>/dev/null | diff - samples/measurements-boundaries.out
+./1brc samples/measurements-complex-utf8.txt       1 2>/dev/null | diff - samples/measurements-complex-utf8.out
+./1brc samples/measurements-complex-utf8.txt       2 2>/dev/null | diff - samples/measurements-complex-utf8.out
+./1brc samples/measurements-10000-unique-keys.txt  1 2>/dev/null | diff - samples/measurements-10000-unique-keys.out
+./1brc samples/measurements-10000-unique-keys.txt  2 2>/dev/null | diff - samples/measurements-10000-unique-keys.out
+./1brc measurements_1B.txt                         6 2>/dev/null | diff - measurements_1B.out
