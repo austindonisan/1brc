@@ -82,6 +82,7 @@ worker_t *get_worker(void *shared, int worker_id);
 unsigned int find_next_row(const void *data, unsigned int offset);
 void print_results(results_t *results, void *mem);
 void debug_results(hash_t *hash);
+inline int hash_to_offset(int hash, int streamIdx);
 void print256(__m256i var);
 
 #define DEBUG 1
@@ -690,13 +691,14 @@ __attribute__((always_inline)) inline int hash_city(__m256i str) {
   return _mm256_extract_epi32(hash, 0);
 }
 
-__attribute__((always_inline)) inline int insert_city(int id, int hash, const __m256i maskedCity, hash_t * h) {
+__attribute__((always_inline)) inline int insert_city(int streamIdx, int hash, const __m256i maskedCity, hash_t * h) {
   while (1) {
-    __m256i stored = _mm256_load_si256((__m256i *)(h->hashed_cities + hash + 0));
+    __m256i stored = _mm256_load_si256((__m256i *)(h->hashed_cities + hash));
 
     __m256i xor = _mm256_xor_si256(maskedCity, stored);
     if (likely(_mm256_testz_si256(xor, xor))) {
-      return hash * 4 + id * 16;
+      return hash_to_offset(hash, streamIdx);
+
     }
     if (_mm256_testz_si256(stored, stored)) {
       _mm256_store_si256((__m256i *)(h->packed_cities + h->num_cities * SHORT_CITY_LENGTH), maskedCity);
@@ -708,18 +710,18 @@ __attribute__((always_inline)) inline int insert_city(int id, int hash, const __
         ((int*)(h->hashed_storage + hash * 4 + i * 16))[2] = MAX_TEMP;
         ((int*)(h->hashed_storage + hash * 4 + i * 16))[3] = MIN_TEMP;
       }
-      return hash * 4 + id * 16;
+      return hash_to_offset(hash, streamIdx);
     }
     hash += SHORT_CITY_LENGTH;
   }
 }
 
-__attribute__((always_inline)) inline int get_offset(int id, int hash, const __m256i maskedCity, hash_t * h) {
+__attribute__((always_inline)) inline int get_offset(int streamIdx, int hash, const __m256i maskedCity, hash_t * h) {
   while (1) {
     __m256i stored = _mm256_load_si256((__m256i *)(h->hashed_cities + hash));
     __m256i xor = _mm256_xor_si256(maskedCity, stored);
     if (likely(_mm256_testz_si256(xor, xor))) {
-      return hash * 4 + id * 16;
+      return hash_to_offset(hash, streamIdx);
     }
     if (_mm256_testz_si256(stored, stored)) {
       return -1;
@@ -969,16 +971,20 @@ void debug_results(hash_t *hash) {
 	long total = 0;
 	for (int i = 0; i < hash->num_cities; i++) {
     __m256i city = _mm256_load_si256((__m256i *)(hash->packed_cities + i * SHORT_CITY_LENGTH));
-    int h = hash_city(city);
-    int o = get_offset(0, h, city, hash);
+    int hash_value = hash_city(city);
+    int offset = get_offset(0, hash_value, city, hash);
 
-	  total += *(int  *)(hash->hashed_storage + o + 8);
+	  total += *(int  *)(hash->hashed_storage + offset + 8);
 	}
   fprintf(stderr, "total: %ld\n", total);
+}
+
+__attribute__((always_inline)) inline int hash_to_offset(int hash, int streamIdx) {
+  return hash * (HASH_ENTRY_SIZE / SHORT_CITY_LENGTH) + streamIdx * sizeof(hash_entry_t);
 }
 
 void print256(__m256i var) {
     char val[32];
     memcpy(val, &var, sizeof(val));
-    printf("%02x %02x %02x %02x  %02x %02x %02x %02x | %02x %02x %02x %02x  %02x %02x %02x %02x | %02x %02x %02x %02x  %02x %02x %02x %02x | %02x %02x %02x %02x  %02x %02x %02x %02x\n", 0xFF & val[0], 0xFF & val[1], 0xFF & val[2], 0xFF & val[3], 0xFF & val[4], 0xFF & val[5], 0xFF & val[6], 0xFF & val[7], 0xFF & val[8], 0xFF & val[9], 0xFF & val[10], 0xFF & val[11], 0xFF & val[12], 0xFF & val[13], 0xFF & val[14], 0xFF & val[15], 0xFF & val[16], 0xFF & val[17], 0xFF & val[18], 0xFF & val[19], 0xFF & val[20], 0xFF & val[21], 0xFF & val[22], 0xFF & val[23], 0xFF & val[24], 0xFF & val[25], 0xFF & val[26], 0xFF & val[27], 0xFF & val[28], 0xFF & val[29], 0xFF & val[30], 0xFF & val[31]);
+    fprintf(stderr, "%02x %02x %02x %02x  %02x %02x %02x %02x | %02x %02x %02x %02x  %02x %02x %02x %02x | %02x %02x %02x %02x  %02x %02x %02x %02x | %02x %02x %02x %02x  %02x %02x %02x %02x\n", 0xFF & val[0], 0xFF & val[1], 0xFF & val[2], 0xFF & val[3], 0xFF & val[4], 0xFF & val[5], 0xFF & val[6], 0xFF & val[7], 0xFF & val[8], 0xFF & val[9], 0xFF & val[10], 0xFF & val[11], 0xFF & val[12], 0xFF & val[13], 0xFF & val[14], 0xFF & val[15], 0xFF & val[16], 0xFF & val[17], 0xFF & val[18], 0xFF & val[19], 0xFF & val[20], 0xFF & val[21], 0xFF & val[22], 0xFF & val[23], 0xFF & val[24], 0xFF & val[25], 0xFF & val[26], 0xFF & val[27], 0xFF & val[28], 0xFF & val[29], 0xFF & val[30], 0xFF & val[31]);
 }
