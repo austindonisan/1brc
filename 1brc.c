@@ -42,6 +42,7 @@ typedef struct {
   int fd;
   int worker_id;
   bool fork;
+  bool warmup;
   bool first;
   bool last;
 } worker_t;
@@ -64,7 +65,7 @@ typedef struct {
   result_t *results[];
 } results_t;
 
-void prep_workers(void *shared, int num_workers, bool fork, int fd, struct stat *fileStat);
+void prep_workers(void *shared, int num_workers, bool fork, bool warmup, int fd, struct stat *fileStat);
 void process_threads(void * shared, int num_workers);
 void process_forks(void * shared, int num_workers);
 int start_worker(void *arg);
@@ -187,8 +188,8 @@ alignas(64) const char * const city_mask = (char []){
  };
 
 int main(int argc, char** argv) {
-  if (argc < 3 || argc > 4) {
-    fprintf(stderr, "Usage: good file workers [fork]\n");
+  if (argc < 3 || argc > 5) {
+    fprintf(stderr, "Usage: good file workers [fork] [warmup]\n");
     return EXIT_FAILURE;
   }
 
@@ -213,6 +214,7 @@ int main(int argc, char** argv) {
   }
 
   const bool use_fork = argc < 4 ? false : atoi(argv[3]) != 0;
+  const bool warmup = argc < 5 ? false : atoi(argv[4]) != 0;
 
   if ((fileStat.st_size - 1) / PAGE_SIZE < num_workers) {
     D(fprintf(stderr, "decreasing num_workers to %ld\n", fileStat.st_size / PAGE_SIZE + 1);)
@@ -220,10 +222,10 @@ int main(int argc, char** argv) {
   }
 
   void * shared_mem = mmap(NULL, WORKER_MEMORY_SIZE * (num_workers > 3 ? num_workers : 3), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-  prep_workers(shared_mem, num_workers, use_fork, fd, &fileStat);
+  prep_workers(shared_mem, num_workers, use_fork, warmup, fd, &fileStat);
 
   TIMER_INIT();
-  if (num_workers == 1 && false) {
+  if (num_workers == 1) {
     start_worker((void *)get_worker(shared_mem, 0));
   }
   else if (use_fork) {
@@ -254,7 +256,7 @@ int main(int argc, char** argv) {
   return 0;
 }
 
-void prep_workers(void *shared, int num_workers, bool fork, int fd, struct stat *fileStat) {
+void prep_workers(void *shared, int num_workers, bool fork, bool warmup, int fd, struct stat *fileStat) {
   long start = 0;
   long delta = PAGE_TRUNC(fileStat->st_size / num_workers);
   for (int i = 0; i < num_workers; i++) {
@@ -269,6 +271,7 @@ void prep_workers(void *shared, int num_workers, bool fork, int fd, struct stat 
       w->end = fileStat->st_size;
     }
     w->fork = fork;
+    w->warmup = warmup;
     w->hash.num_cities = 0;
 
     char *p = (char *)w + WORKER_SIZE;
@@ -339,6 +342,17 @@ int start_worker(void *arg) {
     mmap(data + PAGE_SIZE, mapped_file_length, PROT_READ, MAP_SHARED | MAP_FIXED, w->fd, start);
     TIMER_MS("mmap");
 
+    if (w->warmup) {
+      TIMER_RESET();
+     long dummy = 0;
+     for (long i = 0; i < mapped_file_length; i += PAGE_SIZE) {
+       dummy += *(long *)(data + i);
+      }
+      volatile long dummy2 = dummy;
+      (void)dummy2;
+      TIMER_MS("warmup");
+    }
+
     unsigned int offsets[STRIDE + 1];
     if (first) {
       offsets[0] = PAGE_SIZE;
@@ -353,10 +367,7 @@ int start_worker(void *arg) {
     TIMER_MS("chunk");
   }
 
-
-  TIMER_RESET();
   merge(&w->hash);
-  TIMER_US("merge");
 
   TIMER_RESET();
   D(munmap(data, MMAP_DATA_SIZE));
@@ -410,13 +421,12 @@ void process_chunk(const char * const restrict base, const unsigned int * offset
         return;
       }
 
-      starts_v = _mm256_srlv_epi32(starts_v, finished_v);
+      starts_v = _mm256_andnot_si256(finished_v, starts_v);
       _mm256_store_si256((__m256i *)finished, finished_v);
 
       // wtf, why is this like 10 slower than the masked store
       //_mm256_store_si256((__m256i *)starts, starts_v);
-
-      _mm256_maskstore_epi32((int *)starts, finished_v, _mm256_set1_epi32(0));
+      _mm256_maskstore_epi32((int *)starts, finished_v, starts_v);
       _mm256_maskstore_epi32((int *)ends, finished_v, _mm256_set1_epi32(PAGE_SIZE));
     }
 
@@ -551,8 +561,7 @@ void process_chunk(const char * const restrict base, const unsigned int * offset
     mulled = _mm256_slli_epi32(mulled, 14);
     mulled = _mm256_srli_epi32(mulled, 22);
 
-    __m256i minus = _mm256_set1_epi16('-' << 8 | ';');
-    __m256i minus_mask =  _mm256_cmpeq_epi8(low_words, minus);
+    __m256i minus_mask = _mm256_sub_epi8(low_words, _mm256_set1_epi8('-' + 1));
     __m256i shifted_minus_mask = _mm256_slli_epi32(minus_mask, 16);
     __m256i final = _mm256_sign_epi32(mulled, shifted_minus_mask);
 
