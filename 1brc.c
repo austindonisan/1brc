@@ -131,7 +131,7 @@ void print256(__m256i var);
 #define LONG_CITY_LENGTH 128
 
 #define STRIDE 8
-#define HASH_ENTRY_SIZE (STRIDE * sizeof(hash_entry_t))
+#define HASH_ENTRY_SIZE ((int)(STRIDE * sizeof(hash_entry_t)))
 
 #define HASH_DATA_OFFSET 5        // log2(HASH_DATA_ENTRY_WIDTH)
 #define HASH_CITY_OFFSET 5        // log2(SHORT_CITY_LENGTH)
@@ -149,7 +149,7 @@ void print256(__m256i var);
 #define HASH_LENGTH      (1 << HASH_SHIFT)
 #define HASH_LONG_LENGTH (1 << HASH_LONG_SHIFT)
 
-#define WORKER_SIZE             LINE_CEIL(sizeof(worker_t))
+#define WORKER_SIZE             LINE_CEIL((int)sizeof(worker_t))
 #define PACKED_CITIES_SIZE      LINE_CEIL(SHORT_CITY_LENGTH * MAX_CITIES)
 #define HASHED_CITIES_SIZE      LINE_CEIL(SHORT_CITY_LENGTH * HASH_LENGTH)
 #define HASHED_DATA_SIZE        LINE_CEIL(HASH_ENTRY_SIZE   * HASH_LENGTH)
@@ -1004,8 +1004,8 @@ int long_hash_from_city(__m256i city) {
   return -1;
 }
 
-inline int hash_to_offset(int hash, int streamIdx) {
-  return hash * (HASH_ENTRY_SIZE / SHORT_CITY_LENGTH) + streamIdx * sizeof(hash_entry_t);
+__attribute__((always_inline)) inline int hash_to_offset(int hash, int streamIdx) {
+  return hash * (HASH_ENTRY_SIZE / SHORT_CITY_LENGTH) + streamIdx * (int)sizeof(hash_entry_t);
 }
 
 void print256(__m256i var) {
