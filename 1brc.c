@@ -173,6 +173,7 @@ void print256(__m256i var);
 #define TIMER_RESET()
 #define TIMER_INIT()
 #define TIMER_MS(name)
+#define TIMER_MS_NUM(name, n)
 #define TIMER_US(name)
 #endif
 
