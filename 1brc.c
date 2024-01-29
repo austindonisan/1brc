@@ -165,13 +165,14 @@ void print256(__m256i var);
 #define TIMER_RESET()  clock_gettime(CLOCK_MONOTONIC, &tic);
 #define TIMER_MS(name) clock_gettime(CLOCK_MONOTONIC, &toc); fprintf(stderr, "%-12s: %9.3f ms\n", name, ((toc.tv_sec - tic.tv_sec) + (toc.tv_nsec - tic.tv_nsec) / 1000000000.0) * 1000);
 #define TIMER_MS_NUM(name, n) clock_gettime(CLOCK_MONOTONIC, &toc); fprintf(stderr, "%-9s %2d: %9.3f ms\n", name, n, ((toc.tv_sec - tic.tv_sec) + (toc.tv_nsec - tic.tv_nsec) / 1000000000.0) * 1000);
-//#define TIMER_US(name) clock_gettime(CLOCK_MONOTONIC, &toc); fprintf(stderr, "%-12s: %9.3f us\n", name, ((toc.tv_sec - tic.tv_sec) + (toc.tv_nsec - tic.tv_nsec) / 1000000000.0) * 1000000);
+#define TIMER_US(name) clock_gettime(CLOCK_MONOTONIC, &toc); fprintf(stderr, "%-12s: %9.3f us\n", name, ((toc.tv_sec - tic.tv_sec) + (toc.tv_nsec - tic.tv_nsec) / 1000000000.0) * 1000000);
 #define TIMER_US(name)
 #define TIMER_INIT()   struct timespec tic, toc; (void)tic; (void)toc; TIMER_RESET();
 #else
 #define D(x)
 #define TIMER_RESET()
 #define TIMER_INIT()
+#define TIMER_MS_NUM(name, n)
 #define TIMER_MS(name)
 #define TIMER_US(name)
 #endif
