@@ -156,7 +156,7 @@ inline bool city_is_long(PackedCity city);
 inline bool city_is_dummy(PackedCity city);
 void print256(__m256i var);
 
-#define DEBUG 1
+#define DEBUG 0
 #define UNMAP 0
 #define PIN_CPU 1
 
@@ -218,7 +218,6 @@ void print256(__m256i var);
 #define HASH_LENGTH      (1 << HASH_SHIFT)
 #define HASH_LONG_LENGTH (1 << HASH_LONG_SHIFT)
 
-#define WORKER_SIZE             LINE_CEIL(sizeof(worker_t))
 #define HASH_SIZE               LINE_CEIL(sizeof(hash_t))
 #define PACKED_CITIES_SIZE      LINE_CEIL(SHORT_CITY_LENGTH * MAX_CITIES)
 #define PACKED_OFFSETS_SIZE     LINE_CEIL(32                * MAX_CITIES)
