@@ -1,9 +1,11 @@
-#define _DEFAULT_SOURCE 1
+#define _DEFAULT_SOURCE
+#define _GNU_SOURCE
 #include <fcntl.h>
 #include <features.h>
 #include <immintrin.h>
 #include <limits.h>
 #include <math.h>
+#include <poll.h>
 #include <stdalign.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -11,13 +13,28 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <threads.h>
 #include <unistd.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <x86intrin.h>
+#include <sched.h>
+
+#define MAX_CITIES 10001 // + 1 for dummy city
+#define MAX_TEMP 999
+#define MIN_TEMP -999
+
+#define SHORT_CITY_LENGTH 32
+#define LONG_CITY_LENGTH 128
+
+#define HASH_SHIFT 15 // max(desired, log2(MAX_CITIES))
+#define HASH_LONG_SHIFT 15
+
+#define HASH_ENTRIES      (1 << HASH_SHIFT)
+#define HASH_LONG_ENTRIES (1 << HASH_LONG_SHIFT)
+
+#define STRIDE 8
 
 typedef struct {
   int64_t packed_sum;
@@ -27,6 +44,7 @@ typedef struct {
 
 typedef struct {
   char *packed_cities;
+  int *packed_offsets;
   char *hashed_cities;
   char *hashed_storage;
   char *packed_cities_long;
@@ -36,7 +54,6 @@ typedef struct {
 } hash_t;
 
 typedef struct {
-  hash_t hash;
   long start;
   long end;
   int fd;
@@ -65,10 +82,60 @@ typedef struct {
   result_t *results[];
 } results_t;
 
-void prep_workers(void *shared, int num_workers, bool fork, bool warmup, int fd, struct stat *fileStat);
-void process_threads(void * shared, int num_workers);
-void process_forks(void * shared, int num_workers);
-int start_worker(void *arg);
+
+typedef struct {
+  int64_t packedSumCount;
+  int32_t min;
+  int32_t max;
+} HashRow;
+
+
+typedef struct {
+  int32_t sentinel;
+  int32_t index;
+  int32_t padding[6];
+} LongCityRef;
+
+typedef union {
+  __m256i reg;
+  char bytes[SHORT_CITY_LENGTH];
+} ShortCity;
+
+typedef union {
+  __m256i regs[4];
+  char bytes[LONG_CITY_LENGTH];
+} LongCity;
+
+typedef union {
+  __m256i reg;
+  ShortCity shortCity;
+  LongCityRef longRef;
+} PackedCity;
+
+typedef struct {
+  int64_t sum;
+  int32_t count;
+  int16_t min;
+  int16_t max;
+} ResultsEntry;
+
+typedef struct {
+  uint32_t offset;
+} ResultsRef;
+
+typedef struct {
+  int numCities;
+  int numLongCities;
+  ResultsRef *refs;
+  ResultsEntry *entries;
+  PackedCity *packedCities;
+  LongCity *longCities;
+} Results;
+
+
+void prep_workers(worker_t *workers, int num_workers, bool warmup, int fd, struct stat *fileStat);
+void process(int id, worker_t * workers, int num_workers, int fd, Results *out);
+void start_worker(worker_t *w, Results *out);
 void process_chunk(const char * const restrict base, const unsigned int * offsets, hash_t * restrict h);
 __m256i process_long(const char * start, hash_t *h, int *semicolonBytesOut);
 inline __m256i hash_cities(__m256i a, __m256i b, __m256i c, __m256i d, __m256i e, __m256i f, __m256i g, __m256i h);
@@ -76,27 +143,31 @@ inline int hash_city(__m256i str);
 inline int insert_city(hash_t *h, int hash, int streamIdx, const __m256i maskedCity);
 int insert_city_long(hash_t *h, int hash, __m256i seg0, __m256i seg1, __m256i seg2, __m256i seg3);
 int get_offset(int id, int hash, const __m256i maskedCity, hash_t * h);
-void merge(hash_t *h);
-void merge2(hash_t *a, hash_t *b);
-results_t *sort_results(hash_t *hash, void *mem);
-int sort_result(const void *a, const void *b);
-worker_t *get_worker(void *shared, int worker_id);
+void merge(Results *a, Results *b);
+int sort_result(const void *a, const void *b, void *arg);
 unsigned int find_next_row(const void *data, unsigned int offset);
-void print_results(results_t *results, void *mem);
-void debug_results(hash_t *hash);
+void print_results(Results *results);
+void debug_results(Results *results);
 inline int hash_to_offset(int hash, int streamIdx);
-__m256i city_from_long_hash(int hashValue);
-int long_hash_from_city(__m256i city);
+inline __m256i city_from_long_hash(int hashValue);
+inline int long_hash_from_city(__m256i city);
+inline void setup_results(Results *r);
+inline bool city_is_long(PackedCity city);
+inline bool city_is_dummy(PackedCity city);
 void print256(__m256i var);
 
-#define DEBUG 0
+#define DEBUG 1
+#define UNMAP 0
+#define PIN_CPU 1
 
 #if DEBUG
 #define D(x) x
 #define TIMER_RESET()  clock_gettime(CLOCK_MONOTONIC, &tic);
-#define TIMER_MS(name) clock_gettime(CLOCK_MONOTONIC, &toc); fprintf(stderr, "%-8s: %9.3f ms\n", name, ((toc.tv_sec - tic.tv_sec) + (toc.tv_nsec - tic.tv_nsec) / 1000000000.0) * 1000);
-#define TIMER_US(name) clock_gettime(CLOCK_MONOTONIC, &toc); fprintf(stderr, "%-8s: %9.3f us\n", name, ((toc.tv_sec - tic.tv_sec) + (toc.tv_nsec - tic.tv_nsec) / 1000000000.0) * 1000000);
-#define TIMER_INIT()   struct timespec tic, toc; TIMER_RESET();
+#define TIMER_MS(name) clock_gettime(CLOCK_MONOTONIC, &toc); fprintf(stderr, "%-12s: %9.3f ms\n", name, ((toc.tv_sec - tic.tv_sec) + (toc.tv_nsec - tic.tv_nsec) / 1000000000.0) * 1000);
+#define TIMER_MS_NUM(name, n) clock_gettime(CLOCK_MONOTONIC, &toc); fprintf(stderr, "%-9s %2d: %9.3f ms\n", name, n, ((toc.tv_sec - tic.tv_sec) + (toc.tv_nsec - tic.tv_nsec) / 1000000000.0) * 1000);
+//#define TIMER_US(name) clock_gettime(CLOCK_MONOTONIC, &toc); fprintf(stderr, "%-12s: %9.3f us\n", name, ((toc.tv_sec - tic.tv_sec) + (toc.tv_nsec - tic.tv_nsec) / 1000000000.0) * 1000000);
+#define TIMER_US(name)
+#define TIMER_INIT()   struct timespec tic, toc; (void)tic; (void)toc; TIMER_RESET();
 #else
 #define D(x)
 #define TIMER_RESET()
@@ -111,27 +182,25 @@ void print256(__m256i var);
 #define MIN(x, y) (y + ((x - y) & ((x - y) >> 31)))
 #define MAX(x, y) (x - ((x - y) & ((x - y) >> 31)))
 
-#define PAGE_SIZE 4096
-#define PAGE_MASK (~(PAGE_SIZE - 1))
-#define PAGE_TRUNC(v) ((v) & (PAGE_MASK))
-#define PAGE_CEIL(v)  (PAGE_TRUNC(v + PAGE_SIZE - 1))
-#define PAGE_TRUNC_P(p) ((void *)PAGE_TRUNC((uintptr_t)p))
-#define PAGE_CEIL_P(p) ((void *)PAGE_CEIL((uintptr_t)p))
+#define PAGE_SIZE            0X1000
+#define HUGE_PAGE_SIZE       0x200000
+#define PAGE_MASK            (~(PAGE_SIZE      - 1))
+#define HUGE_PAGE_MASK       (~(HUGE_PAGE_SIZE - 1))
+#define PAGE_TRUNC(v)        ((v) & (PAGE_MASK))
+#define HUGE_PAGE_TRUNC(v)   ((v) & (HUGE_PAGE_MASK))
+#define PAGE_CEIL(v)         (PAGE_TRUNC(v      + PAGE_SIZE      - 1))
+#define HUGE_PAGE_CEIL(v)    (HUGE_PAGE_TRUNC(v + HUGE_PAGE_SIZE - 1))
+#define PAGE_TRUNC_P(p)      ((void *)PAGE_TRUNC((uintptr_t)p))
+#define HUGE_PAGE_TRUNC_P(p) ((void *)HUGE_PAGE_TRUNC((uintptr_t)p))
+#define PAGE_CEIL_P(p)       ((void *)PAGE_CEIL((uintptr_t)p))
+#define HUGE_PAGE_CEIL_P(p)  ((void *)HUGE_PAGE_CEIL((uintptr_t)p))
 
 #define LINE_SIZE 64
 #define LINE_MASK (~(LINE_SIZE - 1))
 #define LINE_TRUNC(v) ((v) & (LINE_MASK))
 #define LINE_CEIL(v)  (LINE_TRUNC(v + LINE_SIZE - 1))
 
-#define MAX_CITIES 10001 // + 1 for dummy city
-#define MAX_TEMP 999
-#define MIN_TEMP -999
-
-#define SHORT_CITY_LENGTH 32
-#define LONG_CITY_LENGTH 128
-
-#define STRIDE 8
-#define HASH_ENTRY_SIZE (STRIDE * sizeof(hash_entry_t))
+#define HASH_ENTRY_SIZE ((int)(STRIDE * sizeof(hash_entry_t)))
 
 #define HASH_DATA_OFFSET 5        // log2(HASH_DATA_ENTRY_WIDTH)
 #define HASH_CITY_OFFSET 5        // log2(SHORT_CITY_LENGTH)
@@ -150,13 +219,27 @@ void print256(__m256i var);
 #define HASH_LONG_LENGTH (1 << HASH_LONG_SHIFT)
 
 #define WORKER_SIZE             LINE_CEIL(sizeof(worker_t))
+#define HASH_SIZE               LINE_CEIL(sizeof(hash_t))
 #define PACKED_CITIES_SIZE      LINE_CEIL(SHORT_CITY_LENGTH * MAX_CITIES)
+#define PACKED_OFFSETS_SIZE     LINE_CEIL(32                * MAX_CITIES)
 #define HASHED_CITIES_SIZE      LINE_CEIL(SHORT_CITY_LENGTH * HASH_LENGTH)
 #define HASHED_DATA_SIZE        LINE_CEIL(HASH_ENTRY_SIZE   * HASH_LENGTH)
 #define PACKED_CITIES_LONG_SIZE LINE_CEIL(LONG_CITY_LENGTH  * MAX_CITIES)
 #define HASHED_CITIES_LONG_SIZE LINE_CEIL(LONG_CITY_LENGTH  * HASH_LONG_LENGTH)
 
-#define WORKER_MEMORY_SIZE PAGE_CEIL(WORKER_SIZE + PACKED_CITIES_SIZE + HASHED_CITIES_SIZE + HASHED_DATA_SIZE + PACKED_CITIES_LONG_SIZE + HASHED_CITIES_LONG_SIZE)
+#define HASH_MEMORY_SIZE HUGE_PAGE_CEIL(HASH_SIZE + PACKED_CITIES_SIZE + PACKED_OFFSETS_SIZE + HASHED_CITIES_SIZE + HASHED_DATA_SIZE + PACKED_CITIES_LONG_SIZE + HASHED_CITIES_LONG_SIZE)
+
+#define RESULTS_SIZE               LINE_CEIL(sizeof(Results))
+#define RESULTS_REFS_SIZE          LINE_CEIL(sizeof(ResultsRef)    * MAX_CITIES)
+#define RESULTS_ENTRIES_SIZE       LINE_CEIL(sizeof(ResultsEntry)  * HASH_ENTRIES)
+#define RESULTS_PACKED_CITIES_SIZE LINE_CEIL(sizeof(PackedCity)    * HASH_ENTRIES)
+#define RESULTS_LONG_CITIES_SIZE   LINE_CEIL(sizeof(LongCity)      * HASH_LONG_ENTRIES)
+
+#define RESULTS_MEMORY_SIZE        HUGE_PAGE_CEIL(RESULTS_SIZE + \
+                                                  RESULTS_REFS_SIZE + \
+                                                  RESULTS_ENTRIES_SIZE + \
+                                                  RESULTS_PACKED_CITIES_SIZE + \
+                                                  RESULTS_LONG_CITIES_SIZE)
 
 #define MMAP_DATA_SIZE (1L << 32)
 #define MAX_CHUNK_SIZE (MMAP_DATA_SIZE - 2*PAGE_SIZE)
@@ -168,6 +251,9 @@ void print256(__m256i var);
 #define EXTRACT_COUNT(v) ((int)(v >> COUNT_BITS_START))
 #define SUM_MASK ((1L << COUNT_BITS_START) - 1)
 #define EXTRACT_SUM(v) ((v & SUM_MASK) - SUM_SIGN_BIT)
+
+#define DUMMY_CITY_SENTINEL 0x00444100
+#define LONG_CITY_SENTINEL 0xFACADE00
 
 alignas(32) const char * const masked_dummy = (char []){
   0 ,'A','D', 0 , 0 , 0 , 0 , 0 ,
@@ -188,8 +274,10 @@ alignas(64) const char * const city_mask = (char []){
  };
 
 int main(int argc, char** argv) {
-  if (argc < 3 || argc > 5) {
-    fprintf(stderr, "Usage: good file workers [fork] [warmup]\n");
+  TIMER_INIT();
+
+  if (argc < 3 || argc > 4) {
+    fprintf(stderr, "Usage: good file workers [warmup]\n");
     return EXIT_FAILURE;
   }
 
@@ -213,54 +301,43 @@ int main(int argc, char** argv) {
     return EXIT_FAILURE;
   }
 
-  const bool use_fork = argc < 4 ? false : atoi(argv[3]) != 0;
-  const bool warmup = argc < 5 ? false : atoi(argv[4]) != 0;
+  const bool warmup = argc < 4 ? false : atoi(argv[3]) != 0;
 
   if ((fileStat.st_size - 1) / PAGE_SIZE < num_workers) {
     D(fprintf(stderr, "decreasing num_workers to %ld\n", fileStat.st_size / PAGE_SIZE + 1);)
     num_workers = (int) (fileStat.st_size / PAGE_SIZE) + 1;
   }
 
-  void * shared_mem = mmap(NULL, WORKER_MEMORY_SIZE * (num_workers > 3 ? num_workers : 3), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-  prep_workers(shared_mem, num_workers, use_fork, warmup, fd, &fileStat);
+  void *mem = mmap(NULL, RESULTS_MEMORY_SIZE + sizeof(worker_t) * num_workers, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  Results *results = mem;
+  setup_results(results);
 
-  TIMER_INIT();
-  if (num_workers == 1) {
-    start_worker((void *)get_worker(shared_mem, 0));
-  }
-  else if (use_fork) {
-    process_forks(shared_mem, num_workers);
-  }
-  else {
-    process_threads(shared_mem, num_workers);
-  }
+  mem += RESULTS_MEMORY_SIZE;
+
+  worker_t *workers = mem;
+  prep_workers(workers, num_workers, warmup, fd, &fileStat);
+
+  TIMER_RESET();
+  process(0, workers, num_workers, -1, results);
   TIMER_MS("process");
 
   TIMER_RESET();
-  hash_t *hash = &get_worker(shared_mem, 0)->hash;
-  for (int i = 1; i < num_workers; i++) {
-    merge2(hash, &get_worker(shared_mem, i)->hash);
-  }
-  TIMER_US("merge2");
-
-  TIMER_RESET();
-  results_t *results = sort_results(hash, (void *)get_worker(shared_mem, 2));
+  qsort_r(results->refs, results->numCities, sizeof(ResultsRef), sort_result, results);
   TIMER_US("sort");
 
   TIMER_RESET();
-  print_results(results, (void *)get_worker(shared_mem, 1));
+  print_results(results);
   TIMER_US("print");
 
-  D(debug_results(hash));
-
+  D(debug_results(results));
   return 0;
 }
 
-void prep_workers(void *shared, int num_workers, bool fork, bool warmup, int fd, struct stat *fileStat) {
+void prep_workers(worker_t *workers, int num_workers, bool warmup, int fd, struct stat *fileStat) {
   long start = 0;
   long delta = PAGE_TRUNC(fileStat->st_size / num_workers);
   for (int i = 0; i < num_workers; i++) {
-    worker_t *w = get_worker(shared, i);
+    worker_t *w = workers + i;
     w->worker_id = i;
     w->fd = fd;
     w->start = start;
@@ -270,57 +347,245 @@ void prep_workers(void *shared, int num_workers, bool fork, bool warmup, int fd,
     if (w->last) {
       w->end = fileStat->st_size;
     }
-    w->fork = fork;
     w->warmup = warmup;
-    w->hash.num_cities = 0;
-
-    char *p = (char *)w + WORKER_SIZE;
-
-    w->hash.packed_cities = p;
-    p += PACKED_CITIES_SIZE;
-
-    w->hash.hashed_cities = p;
-    p += HASHED_CITIES_SIZE;
-
-    w->hash.hashed_storage = p;
-    p += HASHED_DATA_SIZE;
-
-    w->hash.packed_cities_long = p;
-    p += PACKED_CITIES_LONG_SIZE;
-
-    w->hash.hashed_cities_long = p;
-    p += HASHED_CITIES_LONG_SIZE;
   }
 }
 
-void process_threads(void * shared, int num_workers) {
-  thrd_t threads[num_workers];
-  for (int i = 0; i < num_workers; i++) {
-    worker_t *w = get_worker(shared, i);
-    thrd_create(&threads[i], start_worker, w);
-  }
 
-  for (int i = 0; i < num_workers; i++) {
-    thrd_join(threads[i], NULL);
+inline bool long_city_equal(LongCity *a, LongCity *b) {
+  __m256i xor0 = _mm256_xor_si256(a->regs[0], b->regs[0]);
+  __m256i xor1 = _mm256_xor_si256(a->regs[0], b->regs[0]);
+  __m256i xor2 = _mm256_xor_si256(a->regs[0], b->regs[2]);
+  __m256i xor3 = _mm256_xor_si256(a->regs[0], b->regs[3]);
+  return _mm256_testz_si256(xor0, xor0) && _mm256_testz_si256(xor1, xor1) && _mm256_testz_si256(xor2, xor2) && _mm256_testz_si256(xor3, xor3);
+}
+
+void merge(Results *dst, Results *src) {
+  for (int i = 0; i < src->numCities; i++) {
+    ResultsRef ref = src->refs[i];
+    ResultsEntry entry = src->entries[ref.offset / SHORT_CITY_LENGTH];
+    PackedCity city = src->packedCities[ref.offset / SHORT_CITY_LENGTH];
+
+    int hashValue = hash_city(city.reg);
+
+
+    if (unlikely(city_is_long(city))) {
+      LongCity *longCity = src->longCities + city.longRef.index;
+
+      int dstLongCityIdx = -1;
+      LongCity *dstLongCity;
+      for (; dstLongCityIdx < dst->numLongCities; dstLongCityIdx++) {
+        dstLongCity = dst->longCities + dstLongCityIdx;
+        if (long_city_equal(longCity, dstLongCity)) {
+          break;
+        }
+      }
+      // long city not in dst, insert it
+      if (dstLongCityIdx == dst->numLongCities) {
+        dst->longCities[dst->numLongCities] = *longCity;
+        dst->numLongCities++;
+      }
+
+      city = (PackedCity) city_from_long_hash(dstLongCityIdx);
+      hashValue = hash_city(city.reg);
+    }
+
+    while (1) {
+      PackedCity dstCity = dst->packedCities[hashValue / SHORT_CITY_LENGTH];
+      __m256i xor = _mm256_xor_si256(dstCity.reg, city.reg);
+      if (likely(_mm256_testz_si256(xor, xor))) {
+        ResultsEntry *dstEntry = dst->entries + (hashValue / SHORT_CITY_LENGTH);
+        dstEntry->sum += entry.sum;
+        dstEntry->count += entry.count;
+        dstEntry->min = MIN(dstEntry->min, entry.min);
+        dstEntry->max = MAX(dstEntry->max, entry.max);
+        break;
+      }
+
+      if (_mm256_testz_si256(dstCity.reg, dstCity.reg)) {
+        dst->refs[dst->numCities] = (ResultsRef){hashValue};
+        dst->packedCities[hashValue / SHORT_CITY_LENGTH] = city;
+        dst->entries[hashValue / SHORT_CITY_LENGTH] = entry;
+        dst->numCities++;
+        break;
+      }
+      hashValue += SHORT_CITY_LENGTH;
+    }
   }
 }
 
-void process_forks(void *shared, int num_workers) {
-  for (int i = 0; i < num_workers; i++) {
+void process(int id, worker_t * workers, int num_workers, int fdOut, Results *out) {
+  TIMER_INIT();
+
+  int max_k = 8;
+  const bool doWork = num_workers <= max_k;
+  const int k = doWork ? num_workers : (num_workers + (max_k - 1)) / max_k;
+
+  int fd[k][2];
+  struct pollfd poll_fds[k];
+
+
+  void *tmp = mmap(NULL, RESULTS_MEMORY_SIZE * k, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+  Results *childResults[k];
+  for (int i = 0; i < k; i++) {
+    childResults[i] = tmp + i* RESULTS_MEMORY_SIZE;
+    setup_results(childResults[i]);
+  }
+
+  int new_id = id;
+  for (int i = 0; i < k; i++) {
+    pipe(fd[i]);
+    poll_fds[i].fd = fd[i][0];
+    poll_fds[i].events = POLLIN;
+
+    int n = (num_workers + ((k-i)/2)) / (k - i);
+    num_workers -= n;
+
     if (fork() == 0) {
-      start_worker((void *)get_worker(shared, i));
+      close(fd[i][0]);
+
+      if (doWork) {
+        if (PIN_CPU) {
+          cpu_set_t cpu_set;
+          CPU_ZERO(&cpu_set);
+          CPU_SET(new_id, &cpu_set);
+          if (sched_setaffinity(0, sizeof(cpu_set_t), &cpu_set) == -1) {
+            perror("sched_setaffinity");
+          }
+        }
+
+        start_worker(workers + new_id, childResults[i]);
+        write(fd[i][1], "0", 1);
+        exit(0);
+      }
+
+      process(new_id, workers, n, fd[i][1], childResults[i]);
+      if (UNMAP) {
+        while(wait(NULL) != -1) {}
+      }
       exit(0);
+    }
+    new_id += n;
+  }
+
+
+  int childrenFinished = 0;
+  while(childrenFinished < k) {
+    poll(poll_fds, k, -1);
+    for (int i = 0; i < k; i++) {
+      if (poll_fds[i].revents & POLLIN) {
+        char buffer[4];
+        ssize_t num_bytes = read(poll_fds[i].fd, buffer, sizeof(buffer));
+        if (num_bytes > 0) {
+          childrenFinished++;
+
+          TIMER_RESET();
+          merge(out, childResults[i]);
+          TIMER_US("merge");
+        }
+      }
     }
   }
 
-  while(wait(NULL) != -1);
+
+  if (fdOut != -1) {
+    write(fdOut, "0", 1);
+    if (UNMAP) {
+      while(wait(NULL) != -1) {}
+    }
+    exit(0);
+  }
+
+  if (UNMAP) {
+    TIMER_RESET();
+    while(wait(NULL) != -1) {}
+    TIMER_MS("unmap");
+  }
 }
 
-int start_worker(void *arg) {
-  worker_t *w = (worker_t *)arg;
+void setup_results(Results *r) {
+  r->numCities = 0;
+  r->numLongCities = 0;
 
+  void *p = (void *)r;
+  p += RESULTS_SIZE;
+
+  r->refs = p;
+  p += RESULTS_REFS_SIZE;
+
+  r->entries = p;
+  p += RESULTS_ENTRIES_SIZE;
+
+  r->packedCities = p;
+  p += RESULTS_PACKED_CITIES_SIZE;
+
+  r->longCities = p;
+  p += RESULTS_LONG_CITIES_SIZE;
+
+}
+
+void convert_hash_to_results(hash_t *hash, Results *out) {
+  out->numCities = hash->num_cities;
+  out->numLongCities = 0;
+
+  for (int i = 0; i < hash->num_cities; i++) {
+    PackedCity city = { .reg = _mm256_load_si256((__m256i *)(hash->packed_cities + i * SHORT_CITY_LENGTH))};
+    int offset = hash->packed_offsets[i];
+    HashRow *rows = (HashRow *)(hash->hashed_storage + offset * (int)(HASH_ENTRY_SIZE / SHORT_CITY_LENGTH));
+
+    long sum  = EXTRACT_SUM(rows[0].packedSumCount);
+    int count = EXTRACT_COUNT(rows[0].packedSumCount);
+    int min   = rows[0].min;
+    int max   = rows[0].max;
+
+    for (int i = 1; i < STRIDE; i++) {
+      sum +=  EXTRACT_SUM(rows[i].packedSumCount);
+      count +=  EXTRACT_COUNT(rows[i].packedSumCount);
+      min = MIN(min, rows[i].min);
+      max = MAX(max, rows[i].max);
+    }
+
+    out->refs[i] = (ResultsRef) {offset};
+    if (unlikely(city_is_long(city))) {
+      LongCity *longCity = (LongCity *)(hash->hashed_cities_long + city.longRef.index);
+      out->longCities[out->numLongCities] = *longCity;
+
+      city.longRef.index = out->numLongCities;
+      out->numLongCities++;
+    }
+
+    out->packedCities[offset / SHORT_CITY_LENGTH] = city;
+    out->entries[offset / SHORT_CITY_LENGTH] = (ResultsEntry) {sum, count, min, max};
+  }
+}
+
+
+void start_worker(worker_t *w, Results *out) {
   TIMER_INIT();
-  void * const data = mmap(NULL, MMAP_DATA_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+
+  void *hashData = mmap(NULL, HASH_MEMORY_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS , -1, 0);
+  madvise(hashData, HASH_MEMORY_SIZE, MADV_HUGEPAGE);
+
+  hash_t hash = {0};
+  hash.packed_cities = hashData;
+  hashData += PACKED_CITIES_SIZE;
+
+  hash.packed_offsets = hashData;
+  hashData += PACKED_OFFSETS_SIZE;
+
+  hash.hashed_cities = hashData;
+  hashData += HASHED_CITIES_SIZE;
+
+  hash.hashed_storage = hashData;
+  hashData += HASHED_DATA_SIZE;
+
+  hash.packed_cities_long = hashData;
+  hashData += PACKED_CITIES_LONG_SIZE;
+
+  hash.hashed_cities_long = hashData;
+  hashData += HASHED_CITIES_LONG_SIZE;
+
+  void * const data = mmap(NULL, MMAP_DATA_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 
   // \0AD;0.0\n
   __m256i dummyData = _mm256_set1_epi64x(0x0A302E303B444100);
@@ -329,7 +594,6 @@ int start_worker(void *arg) {
   }
 
   for (long start = w->start; start < w->end; start += MAX_CHUNK_SIZE) {
-
     long end = start + MAX_CHUNK_SIZE > w->end ? w->end : start + MAX_CHUNK_SIZE;
 
     bool first = w->first && start == w->start;
@@ -338,9 +602,7 @@ int start_worker(void *arg) {
     unsigned int chunk_size = (unsigned int)(end - start);
     unsigned int mapped_file_length = last ? PAGE_CEIL(chunk_size) : chunk_size + PAGE_SIZE;
 
-    TIMER_RESET();
-    mmap(data + PAGE_SIZE, mapped_file_length, PROT_READ, MAP_SHARED | MAP_FIXED, w->fd, start);
-    TIMER_MS("mmap");
+    mmap(data + PAGE_SIZE, mapped_file_length, PROT_READ, MAP_PRIVATE | MAP_FIXED , w->fd, start);
 
     if (w->warmup) {
       TIMER_RESET();
@@ -353,6 +615,7 @@ int start_worker(void *arg) {
       TIMER_MS("warmup");
     }
 
+
     unsigned int offsets[STRIDE + 1];
     if (first) {
       offsets[0] = PAGE_SIZE;
@@ -363,17 +626,13 @@ int start_worker(void *arg) {
     offsets[STRIDE] = last ? chunk_size + PAGE_SIZE : find_next_row(data, chunk_size + PAGE_SIZE);
 
     TIMER_RESET();
-    process_chunk(data, offsets, &w->hash);
-    TIMER_MS("chunk");
+    process_chunk(data, offsets, &hash);
+    TIMER_MS_NUM("chunk", w->worker_id);
   }
 
-  merge(&w->hash);
-
   TIMER_RESET();
-  D(munmap(data, MMAP_DATA_SIZE));
-  TIMER_MS("munmap");
-
-  return 0;
+  convert_hash_to_results(&hash, out);
+  TIMER_MS("convert");
 }
 
 void process_chunk(const char * const restrict base, const unsigned int * offsets, hash_t * restrict hash) {
@@ -383,6 +642,7 @@ void process_chunk(const char * const restrict base, const unsigned int * offset
   alignas(32) unsigned int starts[STRIDE];
   alignas(32) unsigned int ends[STRIDE];
   alignas(32) int finished[STRIDE] = {0};
+
 
   for (int i = 0; i < STRIDE; i++) {
     starts[i] = offsets[i];
@@ -394,12 +654,11 @@ void process_chunk(const char * const restrict base, const unsigned int * offset
   insert_city(hash, hash_city(_mm256_loadu_si256((__m256i *)masked_dummy)), 0, _mm256_loadu_si256((__m256i *)masked_dummy));
 
   while(1) {
-
 /*
 //    unsigned int tmp[8];
 //    memcpy(tmp, &starts_v, 32);
-    printf("\nstarting:\n");
-    for (int i = 0; i < STRIDE; i++) {
+   printf("\nstarting:\n");
+   for (int i = 0; i < STRIDE; i++) {
       printf("%u ", starts[i]);
 //      printf("%u ", tmp[i]);
     }
@@ -409,7 +668,6 @@ void process_chunk(const char * const restrict base, const unsigned int * offset
     }
     printf("\n\n");
 */
-
     __m256i ends_v =  _mm256_load_si256((__m256i *)ends);
     __m256i at_end_mask = _mm256_cmpeq_epi32(starts_v, ends_v);
     if (unlikely(_mm256_movemask_epi8(at_end_mask))) {
@@ -704,7 +962,6 @@ __attribute__((always_inline)) inline int insert_city(hash_t *h, int hash, int s
 
   while (1) {
     __m256i stored = _mm256_load_si256((__m256i *)(h->hashed_cities + hash));
-
     __m256i xor = _mm256_xor_si256(maskedCity, stored);
     if (likely(_mm256_testz_si256(xor, xor))) {
       return hash_to_offset(hash, streamIdx);
@@ -713,6 +970,7 @@ __attribute__((always_inline)) inline int insert_city(hash_t *h, int hash, int s
     if (_mm256_testz_si256(stored, stored)) {
       _mm256_store_si256((__m256i *)(h->packed_cities + h->num_cities * SHORT_CITY_LENGTH), maskedCity);
       _mm256_store_si256((__m256i *)(h->hashed_cities + hash), maskedCity);
+      h->packed_offsets[h->num_cities] = hash;
       h->num_cities += 1;
 
       for (int i = 0; i < STRIDE; i++) {
@@ -772,152 +1030,53 @@ int insert_city_long(hash_t *hash, int hash_value, __m256i seg0, __m256i seg1, _
   }
 }
 
-void merge(hash_t *h) {
-  for (int i = 0; i < h->num_cities; i++) {
-    __m256i city = _mm256_load_si256((__m256i *)(h->packed_cities + i * SHORT_CITY_LENGTH));
-    int hash = hash_city(city);
-    int off = get_offset(0, hash, city, h);
+int sort_result(const void *a, const void *b, void *arg) {
+  Results *r = arg;
+  const ResultsRef *left = a;
+  const ResultsRef *right = b;
 
-    unsigned long psc = *(long *)(h->hashed_storage + off);
-    long sum  = EXTRACT_SUM(psc);
-    int count = EXTRACT_COUNT(psc);
-    int min   = *(int *)(h->hashed_storage + off + 8);
-    int max   = *(int *)(h->hashed_storage + off + 12);
+  PackedCity *leftCity = r->packedCities + (left->offset / SHORT_CITY_LENGTH);
+  PackedCity *rightCity = r->packedCities + (right->offset / SHORT_CITY_LENGTH);
 
-    for (int i = 1; i < STRIDE; i++) {
-      unsigned long packed_sum_count = *(long *)(h->hashed_storage + off + i * 16 + 0);
-      sum +=  EXTRACT_SUM(packed_sum_count);
-      count +=  EXTRACT_COUNT(packed_sum_count);
-      int old_min = *(int *)(h->hashed_storage + off + i * 16 + 8);
-      int old_max = *(int *)(h->hashed_storage + off + i * 16 + 12);
-      min = MIN(min, old_min);
-      max = MAX(max, old_max);
-    }
-    *(long  *)(h->hashed_storage + off +  0)  = sum;
-    *(int   *)(h->hashed_storage + off +  8)  = count;
-    *(short *)(h->hashed_storage + off + 12)  = min;
-    *(short *)(h->hashed_storage + off + 14)  = max;
+  char *leftBytes = leftCity->shortCity.bytes;
+  char *rightBytes = rightCity->shortCity.bytes;
+
+  if (unlikely(city_is_long(*leftCity))) {
+    leftBytes = r->longCities[leftCity->longRef.index].bytes;
   }
-}
-
-void merge2(hash_t *a, hash_t *b) {
-  for (int i = 0; i < b->num_cities; i++) {
-    __m256i city = _mm256_load_si256((__m256i *)(b->packed_cities + i * SHORT_CITY_LENGTH));
-    int hashValue = hash_city(city);
-    int offsetA = get_offset(0, hashValue, city, a);
-    int offsetB = get_offset(0, hashValue, city, b);
-
-    int longHashB = long_hash_from_city(city);
-
-    // swizzle the pointer to the long city name
-    if (unlikely(longHashB != -1)) {
-      __m256i seg0 = _mm256_loadu_si256((__m256i *)(b->hashed_cities_long + longHashB));
-      __m256i seg1 = _mm256_loadu_si256((__m256i *)(b->hashed_cities_long + longHashB) + 1);
-      __m256i seg2 = _mm256_loadu_si256((__m256i *)(b->hashed_cities_long + longHashB) + 2);
-      __m256i seg3 = _mm256_loadu_si256((__m256i *)(b->hashed_cities_long + longHashB) + 3);
-
-      int longHashA = hash_long(_mm256_extract_epi64(seg0, 0), _mm256_extract_epi64(seg0, 1));
-      longHashA = insert_city_long(a, longHashA, seg0, seg1, seg2, seg3);
-
-      city = city_from_long_hash(longHashA);
-      hashValue = hash_city(city);
-      offsetA = get_offset(0, hashValue, city, a);
-    }
-
-    // city was already seen in A, just merge the data
-    if (likely(offsetA != -1)) {
-      *(long  *)(a->hashed_storage + offsetA +  0) += *(long  *)(b->hashed_storage + offsetB +  0);
-      *(int   *)(a->hashed_storage + offsetA +  8) += *(int   *)(b->hashed_storage + offsetB +  8);
-      *(short *)(a->hashed_storage + offsetA + 12) = MIN(*(short *)(a->hashed_storage + offsetA + 12), *(short *)(b->hashed_storage + offsetB + 12));
-      *(short *)(a->hashed_storage + offsetA + 14) = MAX(*(short *)(a->hashed_storage + offsetA + 14), *(short *)(b->hashed_storage + offsetB + 14));
-    }
-    else {
-      offsetA = insert_city(a, hashValue, 0, city);
-      *(long  *)(a->hashed_storage + offsetA +  0) = *(long  *)(b->hashed_storage + offsetB +  0);
-      *(int   *)(a->hashed_storage + offsetA +  8) = *(int   *)(b->hashed_storage + offsetB +  8);
-      *(short *)(a->hashed_storage + offsetA + 12) = *(short *)(b->hashed_storage + offsetB + 12);
-      *(short *)(a->hashed_storage + offsetA + 14) = *(short *)(b->hashed_storage + offsetB + 14);
-    }
+  if (unlikely(city_is_long(*rightCity))) {
+    rightBytes = r->longCities[rightCity->longRef.index].bytes;
   }
+  return strcmp(leftBytes, rightBytes);
 }
 
-results_t *sort_results(hash_t *hash, void *mem) {
-  results_t *results = mem;
-
-  __m256i nullBytes = _mm256_set1_epi8(0);
-
-  // 0 is dummy
-  results->num_results = hash->num_cities - 1;
-
-  mem += sizeof(results_t) + results->num_results * sizeof(result_t *);
-
-  for (int i = 1; i < hash->num_cities; i++) {
-    result_t *r = mem;
-    mem += sizeof(result_t);
-
-    results->results[i - 1] = r;
-
-    r->city = hash->packed_cities + i * SHORT_CITY_LENGTH;
-
-    __m256i city = _mm256_load_si256((__m256i *)r->city);
-    r->cityLength = _tzcnt_u32(_mm256_movemask_epi8(_mm256_cmpeq_epi8(city, nullBytes)));
-
-    if (unlikely(r->cityLength == 0)) {
-      int long_hash = long_hash_from_city(city);
-
-      r->city = hash->hashed_cities_long + long_hash;
-
-      __m256i seg0 = _mm256_load_si256((__m256i *)(r->city));
-      __m256i seg1 = _mm256_load_si256((__m256i *)(r->city) + 1);
-      __m256i seg2 = _mm256_load_si256((__m256i *)(r->city) + 2);
-      __m256i seg3 = _mm256_load_si256((__m256i *)(r->city) + 3);
-
-      r->cityLength  = _tzcnt_u32(_mm256_movemask_epi8(_mm256_cmpeq_epi8(seg0, nullBytes)));
-      r->cityLength += _tzcnt_u32(_mm256_movemask_epi8(_mm256_cmpeq_epi8(seg1, nullBytes)));
-      r->cityLength += _tzcnt_u32(_mm256_movemask_epi8(_mm256_cmpeq_epi8(seg2, nullBytes)));
-      r->cityLength += _tzcnt_u32(_mm256_movemask_epi8(_mm256_cmpeq_epi8(seg3, nullBytes)));
-    }
-
-    int hash_value = hash_city(city);
-    int offset = get_offset(0, hash_value, city, hash);
-    r->data = (result_data_t *)(hash->hashed_storage + offset);
-
-    int longHash = long_hash_from_city(city);
-
-    if (unlikely(longHash != -1)) {
-      r->city = hash->hashed_cities_long + longHash;
-    }
-  }
-  qsort(results->results, results->num_results, sizeof(result_t *), sort_result);
-  return results;
-}
-
-
-int sort_result(const void *a, const void *b) {
-  result_t *left  = *(result_t **)a;
-  result_t *right = *(result_t **)b;
-  return memcmp(left->city, right->city, LONG_CITY_LENGTH);
-}
-
-void print_results(results_t *results, void *mem) {
-  char *buffer = mem;
+void print_results(Results *results) {
+  char *buffer = malloc(MAX_CITIES * 150);
 
   int pos = 0;
   buffer[pos++] = '{';
 
-  for (int i = 0; i < results->num_results; i++) {
-    result_t *r = results->results[i];
-    memcpy(buffer + pos, r->city, r->cityLength);
-    pos += r->cityLength;
-    buffer[pos++] = '=';
+  // result 0 is dummy
+  for (int i = 1; i < results->numCities; i++) {
+    ResultsRef ref = results->refs[i];
+    PackedCity city = results->packedCities[ref.offset / SHORT_CITY_LENGTH];
+    ResultsEntry entry = results->entries[ref.offset / SHORT_CITY_LENGTH];
 
-    float sum = r->data->sum * 1.0;
-    float count = r->data->count * 1.0;
-    float min = r->data->min * 0.1;
-    float max = r->data->max * 0.1;
-    pos += sprintf(buffer + pos, "%.1f/%.1f/%.1f", min, round(sum/count) * 0.1, max);
+    float sum = entry.sum;
+    float count = entry.count;
+    float min = entry.min * 0.1;
+    float max = entry.max * 0.1;
 
-    if (i != results->num_results - 1) {
+    const char *bytes;
+    if (unlikely(city_is_long(city))) {
+      bytes = results->longCities[city.longRef.index].bytes;
+    }
+    else {
+      bytes = city.shortCity.bytes;
+    }
+    pos += sprintf(buffer + pos, "%s=%.1f/%.1f/%.1f", bytes, min, round(sum/count) * 0.1, max);
+
+    if (i != results->numCities - 1) {
       buffer[pos++] = ',';
       buffer[pos++] = ' ';
     }
@@ -926,10 +1085,6 @@ void print_results(results_t *results, void *mem) {
   buffer[pos++] = '\n';
   buffer[pos++] = '\0';
   fputs(buffer, stdout);
-}
-
-worker_t *get_worker(void *shared, int worker_id) {
-  return (worker_t *)(shared + WORKER_MEMORY_SIZE * worker_id);
 }
 
 unsigned int find_next_row(const void *data, unsigned int offset) {
@@ -945,69 +1100,58 @@ unsigned int find_next_row(const void *data, unsigned int offset) {
   return offset + bytes + 1;
 }
 
-void debug_results(hash_t *hash) {
-  char fullCity[LONG_CITY_LENGTH + 1] = {0};
+void debug_results(Results *results) {
   const char * dummyName = "__DUMMY__";
 
   fprintf(stderr, "\n");
+  for (int i = 0; i < MIN(10, results->numCities); i++) {
+    ResultsRef ref = results->refs[i];
+    PackedCity city = results->packedCities[ref.offset / SHORT_CITY_LENGTH];
+    ResultsEntry entry = results->entries[ref.offset / SHORT_CITY_LENGTH];
 
-  for (int i = 0; i < MIN(10, hash->num_cities); i++) {
-    __m256i city = _mm256_load_si256((__m256i *)(hash->packed_cities + i * SHORT_CITY_LENGTH));
-    int longHash = long_hash_from_city(city);
-    if (i == 0) {
-      strcpy(fullCity, dummyName);
+    const char *bytes;
+    if (city_is_dummy(city)) {
+      bytes = dummyName;
     }
-    else if (longHash == -1) {
-      _mm256_storeu_si256((__m256i *)fullCity, city);
-      fullCity[32] = 0;
+    else if (city_is_long(city)) {
+      bytes = results->longCities[city.longRef.index].bytes;
     }
     else {
-      __m256i seg0 = _mm256_load_si256((__m256i *)(hash->hashed_cities_long + longHash));
-      __m256i seg1 = _mm256_load_si256((__m256i *)(hash->hashed_cities_long + longHash) + 1);
-      __m256i seg2 = _mm256_load_si256((__m256i *)(hash->hashed_cities_long + longHash) + 2);
-      __m256i seg3 = _mm256_load_si256((__m256i *)(hash->hashed_cities_long + longHash) + 3);
-      _mm256_storeu_si256((__m256i *)fullCity, seg0);
-      _mm256_storeu_si256((__m256i *)fullCity + 1, seg1);
-      _mm256_storeu_si256((__m256i *)fullCity + 2, seg2);
-      _mm256_storeu_si256((__m256i *)fullCity + 3, seg3);
+      bytes = city.shortCity.bytes;
     }
-    int h = hash_city(city);
-    int offset = get_offset(0, h, city, hash);
-    fprintf(stderr, "%-100s %12ld %11d %4d %4d\n",
-      fullCity,
-      *(long  *)(hash->hashed_storage + offset + 0),
-      *(int   *)(hash->hashed_storage + offset + 8),
-      *(short *)(hash->hashed_storage + offset + 12),
-      *(short *)(hash->hashed_storage + offset + 14));
-
+    fprintf(stderr, "%-100s %12ld %11d %4d %4d\n", bytes, entry.sum, entry.count, entry.min, entry.max);
   }
 
 	long total = 0;
-	for (int i = 0; i < hash->num_cities; i++) {
-    __m256i city = _mm256_load_si256((__m256i *)(hash->packed_cities + i * SHORT_CITY_LENGTH));
-    int hash_value = hash_city(city);
-    int offset = get_offset(0, hash_value, city, hash);
-
-	  total += *(int  *)(hash->hashed_storage + offset + 8);
+	for (int i = 0; i < results->numCities; i++) {
+    ResultsRef ref = results->refs[i];
+    ResultsEntry entry = results->entries[ref.offset / SHORT_CITY_LENGTH];
+	  total += entry.count;
 	}
   fprintf(stderr, "total: %ld\n", total);
 }
 
-__m256i city_from_long_hash(int hashValue) {
-  return _mm256_set_epi32(0, 0, 0, 0, 0, hashValue, 0xDEADBEEF, 0);
+__attribute__((always_inline)) inline __m256i city_from_long_hash(int hashValue) {
+  return _mm256_set_epi32(0, 0, 0, 0, 0, 0, hashValue, LONG_CITY_SENTINEL);
 }
 
-int long_hash_from_city(__m256i city) {
+__attribute__((always_inline)) inline int long_hash_from_city(__m256i city) {
   if (_mm256_extract_epi64(city, 0) == 0xDEADBEEF00000000) {
     return _mm256_extract_epi32(city, 2);
   }
   return -1;
 }
 
-inline int hash_to_offset(int hash, int streamIdx) {
-  return hash * (HASH_ENTRY_SIZE / SHORT_CITY_LENGTH) + streamIdx * sizeof(hash_entry_t);
+__attribute__((always_inline)) inline int hash_to_offset(int hash, int streamIdx) {
+  return hash * (int)(HASH_ENTRY_SIZE / SHORT_CITY_LENGTH) + streamIdx * (int)sizeof(hash_entry_t);
 }
 
+__attribute__((always_inline)) inline bool city_is_long(PackedCity city) {
+  return city.longRef.sentinel == LONG_CITY_SENTINEL;
+}
+__attribute__((always_inline)) inline bool city_is_dummy(PackedCity city) {
+  return city.longRef.sentinel == DUMMY_CITY_SENTINEL;
+}
 void print256(__m256i var) {
     char val[32];
     memcpy(val, &var, sizeof(val));
