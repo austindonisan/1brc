@@ -28,7 +28,7 @@
 #define SHORT_CITY_LENGTH 32
 #define LONG_CITY_LENGTH 128
 
-#define HASH_SHIFT 15 // max(desired, log2(MAX_CITIES))
+#define HASH_SHIFT 15        // max(desired, log2(MAX_CITIES))
 #define HASH_LONG_SHIFT 15
 
 #define HASH_ENTRIES      (1 << HASH_SHIFT)
@@ -165,8 +165,8 @@ void print256(__m256i var);
 #define TIMER_RESET()  clock_gettime(CLOCK_MONOTONIC, &tic);
 #define TIMER_MS(name) clock_gettime(CLOCK_MONOTONIC, &toc); fprintf(stderr, "%-12s: %9.3f ms\n", name, ((toc.tv_sec - tic.tv_sec) + (toc.tv_nsec - tic.tv_nsec) / 1000000000.0) * 1000);
 #define TIMER_MS_NUM(name, n) clock_gettime(CLOCK_MONOTONIC, &toc); fprintf(stderr, "%-9s %2d: %9.3f ms\n", name, n, ((toc.tv_sec - tic.tv_sec) + (toc.tv_nsec - tic.tv_nsec) / 1000000000.0) * 1000);
-//#define TIMER_US(name) clock_gettime(CLOCK_MONOTONIC, &toc); fprintf(stderr, "%-12s: %9.3f us\n", name, ((toc.tv_sec - tic.tv_sec) + (toc.tv_nsec - tic.tv_nsec) / 1000000000.0) * 1000000);
-#define TIMER_US(name)
+#define TIMER_US(name) clock_gettime(CLOCK_MONOTONIC, &toc); fprintf(stderr, "%-12s: %9.3f us\n", name, ((toc.tv_sec - tic.tv_sec) + (toc.tv_nsec - tic.tv_nsec) / 1000000000.0) * 1000000);
+//#define TIMER_US(name)
 #define TIMER_INIT()   struct timespec tic, toc; (void)tic; (void)toc; TIMER_RESET();
 #else
 #define D(x)
@@ -206,9 +206,6 @@ void print256(__m256i var);
 #define HASH_DATA_OFFSET 5        // log2(HASH_DATA_ENTRY_WIDTH)
 #define HASH_CITY_OFFSET 5        // log2(SHORT_CITY_LENGTH)
 #define HASH_CITY_LONG_OFFSET 7   // log2(LONG_CITY_LENGTH)
-
-#define HASH_SHIFT 15              // 1 + max(desired, log2(MAX_CITIES))
-#define HASH_LONG_SHIFT 15         // 1 + max(desired, log2(MAX_CITIES))
 
 #define HASH_SHORT_MASK (((1 << (HASH_SHIFT      - 1)) - 1) << MIN(HASH_DATA_OFFSET, HASH_CITY_OFFSET))
 #define HASH_LONG_MASK  (((1 << (HASH_LONG_SHIFT - 1)) - 1) << HASH_CITY_LONG_OFFSET)
@@ -354,9 +351,9 @@ void prep_workers(worker_t *workers, int num_workers, bool warmup, int fd, struc
 
 inline bool long_city_equal(LongCity *a, LongCity *b) {
   __m256i xor0 = _mm256_xor_si256(a->regs[0], b->regs[0]);
-  __m256i xor1 = _mm256_xor_si256(a->regs[0], b->regs[0]);
-  __m256i xor2 = _mm256_xor_si256(a->regs[0], b->regs[2]);
-  __m256i xor3 = _mm256_xor_si256(a->regs[0], b->regs[3]);
+  __m256i xor1 = _mm256_xor_si256(a->regs[1], b->regs[1]);
+  __m256i xor2 = _mm256_xor_si256(a->regs[2], b->regs[2]);
+  __m256i xor3 = _mm256_xor_si256(a->regs[3], b->regs[3]);
   return _mm256_testz_si256(xor0, xor0) && _mm256_testz_si256(xor1, xor1) && _mm256_testz_si256(xor2, xor2) && _mm256_testz_si256(xor3, xor3);
 }
 
@@ -368,11 +365,10 @@ void merge(Results *dst, Results *src) {
 
     int hashValue = hash_city(city.reg);
 
-
     if (unlikely(city_is_long(city))) {
       LongCity *longCity = src->longCities + city.longRef.index;
 
-      int dstLongCityIdx = -1;
+      int dstLongCityIdx = 0;
       LongCity *dstLongCity;
       for (; dstLongCityIdx < dst->numLongCities; dstLongCityIdx++) {
         dstLongCity = dst->longCities + dstLongCityIdx;
