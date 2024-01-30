@@ -762,63 +762,68 @@ void process_chunk(const char * const restrict base, const unsigned int * offset
     starts_v = _mm256_add_epi32(starts_v, semicolons_v);
 
     // shuffled order
-    nums[0] = *(long *)(base + starts[0] + semicolonBytes0);
-    nums[1] = *(long *)(base + starts[1] + semicolonBytes1);
-    nums[2] = *(long *)(base + starts[4] + semicolonBytes4);
-    nums[3] = *(long *)(base + starts[5] + semicolonBytes5);
-    nums[4] = *(long *)(base + starts[2] + semicolonBytes2);
-    nums[5] = *(long *)(base + starts[3] + semicolonBytes3);
-    nums[6] = *(long *)(base + starts[6] + semicolonBytes6);
-    nums[7] = *(long *)(base + starts[7] + semicolonBytes7);
+    nums[0] = *(long *)(base + starts[0] + semicolonBytes0 - 2);
+    nums[1] = *(long *)(base + starts[1] + semicolonBytes1 - 2);
+    nums[2] = *(long *)(base + starts[4] + semicolonBytes4 - 2);
+    nums[3] = *(long *)(base + starts[5] + semicolonBytes5 - 2);
+    nums[4] = *(long *)(base + starts[2] + semicolonBytes2 - 2);
+    nums[5] = *(long *)(base + starts[3] + semicolonBytes3 - 2);
+    nums[6] = *(long *)(base + starts[6] + semicolonBytes6 - 2);
+    nums[7] = *(long *)(base + starts[7] + semicolonBytes7 - 2);
 
-    // 0, 1, 4, 5
+    // nums: 0, 1, 4, 5
     __m256i nums_low = _mm256_load_si256((__m256i *)nums);
 
-    // 2, 3, 6, 7
+    // nums: 2, 3, 6, 7
     __m256i nums_high = _mm256_load_si256((__m256i *)(nums + 4));
 
-    __m256i low_period_mask =  _mm256_cmpeq_epi8(nums_low, _mm256_set1_epi8('.'));
-    __m256i high_period_mask =  _mm256_cmpeq_epi8(nums_high, _mm256_set1_epi8('.'));
-
+    // bytes 0-3 and 4-7
     __m256i low_words = (__m256i) _mm256_shuffle_ps((__m256)nums_low, (__m256)nums_high, 0x88);
+    __m256i high_words = (__m256i) _mm256_shuffle_ps((__m256)nums_low, (__m256)nums_high, 0xDD);
 
-    __m256i semicolon_mask = _mm256_set1_epi64x(';');
-    nums_low =  _mm256_xor_si256(nums_low, semicolon_mask);
-    nums_high =  _mm256_xor_si256(nums_high, semicolon_mask);
+    // byte 2 is FF (always matches semicolon) to stop sign() from zeroring in the positive case
+    // byte 3 is 00/FF for the minus sign, ready for masking
+    __m256i minus_mask = _mm256_cmpeq_epi8(low_words, _mm256_set1_epi16(';' + ('-' << 8)));
 
-    // remove high 7/8 bits for -99.9 case
-    low_period_mask =  _mm256_slli_epi64(low_period_mask, 31);
-    high_period_mask =  _mm256_slli_epi64(high_period_mask, 31);
+    // bytes 3-6, for the positive cases with a digit in byte 3
+    __m256i nums_low_left1 = _mm256_slli_epi64(nums_low, 8);
+    __m256i nums_high_left1 = _mm256_slli_epi64(nums_high, 8);
+    __m256i high_words_left1 = (__m256i) _mm256_shuffle_ps((__m256)nums_low_left1, (__m256)nums_high_left1, 0xDD);
 
-    // remove low 7/8 bits for 99.9 case
-    low_period_mask =  _mm256_srli_epi64(low_period_mask, 62);
-    high_period_mask =  _mm256_srli_epi64(high_period_mask, 62);
+    // no negative sign, left aligned so decimal is alway in byte 1 or 2
+    __m256i nums_blended = (__m256i)_mm256_blendv_ps((__m256d)high_words_left1, (__m256d)high_words, (__m256d)minus_mask);
+    // 2 cycle stall
 
-    // 0x88 0 1 4 5, 2 3 6 7 -> 0L 1L 2L 3L 4L 5L 6L 7L
-    __m256i period_offsets = (__m256i) _mm256_shuffle_ps((__m256)low_period_mask, (__m256)high_period_mask, 0x88);
+    // 6 bytes default added to line length
+    starts_v = _mm256_add_epi32(starts_v, _mm256_set1_epi32(6));
 
-    period_offsets = _mm256_add_epi32(period_offsets, _mm256_set1_epi32(5));
-    starts_v = _mm256_add_epi32(starts_v, period_offsets);
+    // extra 1 byte for minus sign
+    __m256i minus_mask_shift = _mm256_srli_epi32(minus_mask, 31);
+
+    // byte 3 FF matches newline X.X and -X.X cases
+    __m256i newline_mask = _mm256_cmpeq_epi8(nums_blended, _mm256_set1_epi8('\n'));
+
+    // 1 shorter line length for for X.X and -X.X cases (subtract it later)
+    __m256i newline_mask_shift = _mm256_srli_epi32(newline_mask, 31);
+
+    // shift words in X.X and -X.X cases to always have decimal in byte 2
+    __m256 newline_shift = _mm256_slli_epi32(newline_mask_shift, 3);
+    nums_blended = _mm256_sllv_epi32(nums_blended, newline_shift);
+
+    // convert ascii to numbers, hide '.' with saturation
+    __m256i numbers = _mm256_subs_epu8(nums_blended, _mm256_set1_epi8('0'));
+
+    __m256i mulled = _mm256_madd_epi16(numbers, _mm256_set1_epi32(0x0001640a));
+    // 5 cycle stall
+
+    // store start of next line
+    starts_v = _mm256_add_epi32(starts_v, minus_mask_shift);
+    starts_v = _mm256_sub_epi32(starts_v, newline_mask_shift);
     _mm256_store_si256((__m256i *)(starts), starts_v);
 
-    __m256i load3 = _mm256_set_epi64x( 0x800F0D0C800B0908, 0x8007050480030100, 0x800F0D0C800B0908, 0x8007050480030100);
-    low_period_mask =  _mm256_slli_epi64(low_period_mask, 3);
-    high_period_mask =  _mm256_slli_epi64(high_period_mask, 3);
-    __m256i low_shifted =_mm256_srlv_epi64(nums_low, low_period_mask);
-    __m256i high_shifted =_mm256_srlv_epi64(nums_high, high_period_mask);
-    __m256i numbers = (__m256i) _mm256_shuffle_ps((__m256)low_shifted, (__m256)high_shifted, 0x88);
-    numbers = _mm256_shuffle_epi8(numbers, load3);
-
-    // convert from ascii, hide '-'
-    numbers = _mm256_subs_epu8(numbers, _mm256_set1_epi8('0'));
-
-    __m256i mulled = _mm256_madd_epi16(numbers, _mm256_set1_epi32(0x0100640a));
     mulled = _mm256_slli_epi32(mulled, 14);
     mulled = _mm256_srli_epi32(mulled, 22);
-
-    __m256i minus_mask = _mm256_sub_epi8(low_words, _mm256_set1_epi8('-' + 1));
-    __m256i shifted_minus_mask = _mm256_slli_epi32(minus_mask, 16);
-    __m256i final = _mm256_sign_epi32(mulled, shifted_minus_mask);
+    __m256i final = _mm256_sign_epi32(mulled, minus_mask);
 
     int offset0 = insert_city(hash, _mm256_extract_epi32(city_hashes, 0), 0, maskedCity0);
     int offset1 = insert_city(hash, _mm256_extract_epi32(city_hashes, 4), 1, maskedCity1);
