@@ -21,6 +21,11 @@
 #include <x86intrin.h>
 #include <sched.h>
 
+#define DEBUG 0
+#define UNMAP 0
+#define PIN_CPU 1
+
+
 #define MAX_CITIES 10001 // + 1 for dummy city
 #define MAX_TEMP 999
 #define MIN_TEMP -999
@@ -155,10 +160,6 @@ inline void setup_results(Results *r);
 inline bool city_is_long(PackedCity city);
 inline bool city_is_dummy(PackedCity city);
 void print256(__m256i var);
-
-#define DEBUG 0
-#define UNMAP 0
-#define PIN_CPU 1
 
 #if DEBUG
 #define D(x) x
@@ -667,7 +668,7 @@ void process_chunk(const char * const restrict base, const unsigned int * offset
 */
     __m256i ends_v =  _mm256_load_si256((__m256i *)ends);
     __m256i at_end_mask = _mm256_cmpeq_epi32(starts_v, ends_v);
-    if (unlikely(_mm256_movemask_epi8(at_end_mask))) {
+    if (unlikely(!_mm256_testz_si256(at_end_mask, at_end_mask))) {
 
       __m256i finished_v = _mm256_load_si256((__m256i *)finished);
       finished_v = _mm256_or_si256(finished_v, at_end_mask);
@@ -722,8 +723,10 @@ void process_chunk(const char * const restrict base, const unsigned int * offset
     __m256i maskedCity7 = _mm256_sign_epi8(rawCity7, rawMask7);
 
     __m256i semicolons_v = _mm256_set_epi32(semicolonBytes7, semicolonBytes6, semicolonBytes5, semicolonBytes4, semicolonBytes3, semicolonBytes2, semicolonBytes1, semicolonBytes0);
-    if (unlikely(_mm256_movemask_epi8(_mm256_cmpeq_epi32(semicolons_v, _mm256_set1_epi32(32))))) {
-      if (semicolonBytes0 == 32) {
+    __m256i longCities = _mm256_cmpeq_epi32(semicolons_v, _mm256_set1_epi32(32));
+
+    if (unlikely(!_mm256_testz_si256(longCities, longCities))) {
+      if (unlikely(semicolonBytes0 == 32)) {
         maskedCity0 = process_long(base +  starts[0], hash, &semicolonBytes0);
         semicolons_v = _mm256_insert_epi32(semicolons_v, semicolonBytes0, 0);
       }
@@ -791,7 +794,7 @@ void process_chunk(const char * const restrict base, const unsigned int * offset
     __m256i high_words_left1 = (__m256i) _mm256_shuffle_ps((__m256)nums_low_left1, (__m256)nums_high_left1, 0xDD);
 
     // no negative sign, left aligned so decimal is alway in byte 1 or 2
-    __m256i nums_blended = (__m256i)_mm256_blendv_ps((__m256d)high_words_left1, (__m256d)high_words, (__m256d)minus_mask);
+    __m256i nums_blended = (__m256i)_mm256_blendv_ps((__m256)high_words_left1, (__m256)high_words, (__m256)minus_mask);
     // 2 cycle stall
 
     // 6 bytes default added to line length
@@ -807,7 +810,7 @@ void process_chunk(const char * const restrict base, const unsigned int * offset
     __m256i newline_mask_shift = _mm256_srli_epi32(newline_mask, 31);
 
     // shift words in X.X and -X.X cases to always have decimal in byte 2
-    __m256 newline_shift = _mm256_slli_epi32(newline_mask_shift, 3);
+    __m256i newline_shift = _mm256_slli_epi32(newline_mask_shift, 3);
     nums_blended = _mm256_sllv_epi32(nums_blended, newline_shift);
 
     // convert ascii to numbers, hide '.' with saturation
