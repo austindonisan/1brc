@@ -21,9 +21,23 @@
 #include <x86intrin.h>
 #include <sched.h>
 
-#define DEBUG 0
+/*
+ * Wait() for all child processes before exiting.
+ * This avoids the default "cheating" of returning before all memory is unmapped.
+ */
 #define UNMAP 0
+
+/*
+ * Pin worker threads to the CPU number matching their ID of [0-n).
+ * Very helpfuly at high core counts, slightly harmful at low ones.
+ * If using a hyperthreaded CPU first ensure that logical CPU numbers aren't interleaved.
+ */
 #define PIN_CPU 1
+
+/*
+ * Print timing information and city summary to stderr
+ */
+#define DEBUG 0
 
 
 #define MAX_CITIES 10001 // + 1 for dummy city
@@ -69,31 +83,12 @@ typedef struct {
   bool last;
 } worker_t;
 
-typedef struct {
-  int64_t sum;
-  int32_t count;
-  int16_t min;
-  int16_t max;
-} result_data_t;
-
-typedef struct {
-  result_data_t *data;
-  char *city;
-  int cityLength;
-} result_t;
-
-typedef struct {
-  int num_results;
-  result_t *results[];
-} results_t;
-
 
 typedef struct {
   int64_t packedSumCount;
   int32_t min;
   int32_t max;
 } HashRow;
-
 
 typedef struct {
   int32_t sentinel;
@@ -118,11 +113,12 @@ typedef union {
 } PackedCity;
 
 typedef struct {
+  PackedCity city;
   int64_t sum;
   int32_t count;
   int16_t min;
   int16_t max;
-} ResultsEntry;
+} ResultsRow;
 
 typedef struct {
   uint32_t offset;
@@ -132,11 +128,9 @@ typedef struct {
   int numCities;
   int numLongCities;
   ResultsRef *refs;
-  ResultsEntry *entries;
-  PackedCity *packedCities;
+  ResultsRow *rows;
   LongCity *longCities;
 } Results;
-
 
 void prep_workers(worker_t *workers, int num_workers, bool warmup, int fd, struct stat *fileStat);
 void process(int id, worker_t * workers, int num_workers, int fd, Results *out);
@@ -229,15 +223,13 @@ void print256(__m256i var);
 #define HASH_MEMORY_SIZE HUGE_PAGE_CEIL(HASH_SIZE + PACKED_CITIES_SIZE + PACKED_OFFSETS_SIZE + HASHED_CITIES_SIZE + HASHED_DATA_SIZE + PACKED_CITIES_LONG_SIZE + HASHED_CITIES_LONG_SIZE)
 
 #define RESULTS_SIZE               LINE_CEIL(sizeof(Results))
-#define RESULTS_REFS_SIZE          LINE_CEIL(sizeof(ResultsRef)    * MAX_CITIES)
-#define RESULTS_ENTRIES_SIZE       LINE_CEIL(sizeof(ResultsEntry)  * HASH_ENTRIES)
-#define RESULTS_PACKED_CITIES_SIZE LINE_CEIL(sizeof(PackedCity)    * HASH_ENTRIES)
-#define RESULTS_LONG_CITIES_SIZE   LINE_CEIL(sizeof(LongCity)      * HASH_LONG_ENTRIES)
+#define RESULTS_REFS_SIZE          LINE_CEIL(sizeof(ResultsRef)  * MAX_CITIES)
+#define RESULTS_ROWS_SIZE          LINE_CEIL(sizeof(ResultsRow)  * HASH_ENTRIES)
+#define RESULTS_LONG_CITIES_SIZE   LINE_CEIL(sizeof(LongCity)    * HASH_LONG_ENTRIES)
 
 #define RESULTS_MEMORY_SIZE        HUGE_PAGE_CEIL(RESULTS_SIZE + \
                                                   RESULTS_REFS_SIZE + \
-                                                  RESULTS_ENTRIES_SIZE + \
-                                                  RESULTS_PACKED_CITIES_SIZE + \
+                                                  RESULTS_ROWS_SIZE + \
                                                   RESULTS_LONG_CITIES_SIZE)
 
 #define MMAP_DATA_SIZE (1L << 32)
@@ -317,7 +309,12 @@ int main(int argc, char** argv) {
   prep_workers(workers, num_workers, warmup, fd, &fileStat);
 
   TIMER_RESET();
-  process(0, workers, num_workers, -1, results);
+  if (UNMAP && num_workers == 1) {
+    start_worker(workers, results);
+  }
+  else {
+    process(0, workers, num_workers, -1, results);
+  }
   TIMER_MS("process");
 
   TIMER_RESET();
@@ -362,13 +359,11 @@ inline bool long_city_equal(LongCity *a, LongCity *b) {
 void merge(Results *dst, Results *src) {
   for (int i = 0; i < src->numCities; i++) {
     ResultsRef ref = src->refs[i];
-    ResultsEntry entry = src->entries[ref.offset / SHORT_CITY_LENGTH];
-    PackedCity city = src->packedCities[ref.offset / SHORT_CITY_LENGTH];
+    ResultsRow row = src->rows[ref.offset / SHORT_CITY_LENGTH];
+    int hashValue = hash_city(row.city.reg);
 
-    int hashValue = hash_city(city.reg);
-
-    if (unlikely(city_is_long(city))) {
-      LongCity *longCity = src->longCities + city.longRef.index;
+    if (unlikely(city_is_long(row.city))) {
+      LongCity *longCity = src->longCities + row.city.longRef.index;
 
       int dstLongCityIdx = 0;
       LongCity *dstLongCity;
@@ -384,26 +379,24 @@ void merge(Results *dst, Results *src) {
         dst->numLongCities++;
       }
 
-      city = (PackedCity) city_from_long_hash(dstLongCityIdx);
-      hashValue = hash_city(city.reg);
+      row.city = (PackedCity) city_from_long_hash(dstLongCityIdx);
+      hashValue = hash_city(row.city.reg);
     }
 
     while (1) {
-      PackedCity dstCity = dst->packedCities[hashValue / SHORT_CITY_LENGTH];
-      __m256i xor = _mm256_xor_si256(dstCity.reg, city.reg);
+      ResultsRow *dstRow = dst->rows + (hashValue / SHORT_CITY_LENGTH);
+      __m256i xor = _mm256_xor_si256(dstRow->city.reg, row.city.reg);
       if (likely(_mm256_testz_si256(xor, xor))) {
-        ResultsEntry *dstEntry = dst->entries + (hashValue / SHORT_CITY_LENGTH);
-        dstEntry->sum += entry.sum;
-        dstEntry->count += entry.count;
-        dstEntry->min = MIN(dstEntry->min, entry.min);
-        dstEntry->max = MAX(dstEntry->max, entry.max);
+        dstRow->sum += row.sum;
+        dstRow->count += row.count;
+        dstRow->min = MIN(dstRow->min, row.min);
+        dstRow->max = MAX(dstRow->max, row.max);
         break;
       }
 
-      if (_mm256_testz_si256(dstCity.reg, dstCity.reg)) {
+      if (_mm256_testz_si256(dstRow->city.reg, dstRow->city.reg)) {
         dst->refs[dst->numCities] = (ResultsRef){hashValue};
-        dst->packedCities[hashValue / SHORT_CITY_LENGTH] = city;
-        dst->entries[hashValue / SHORT_CITY_LENGTH] = entry;
+        dst->rows[hashValue /  SHORT_CITY_LENGTH] = row;
         dst->numCities++;
         break;
       }
@@ -479,7 +472,7 @@ void process(int id, worker_t * workers, int num_workers, int fdOut, Results *ou
 
           TIMER_RESET();
           merge(out, childResults[i]);
-          TIMER_US("merge");
+          TIMER_MS("merge");
         }
       }
     }
@@ -511,11 +504,8 @@ void setup_results(Results *r) {
   r->refs = p;
   p += RESULTS_REFS_SIZE;
 
-  r->entries = p;
-  p += RESULTS_ENTRIES_SIZE;
-
-  r->packedCities = p;
-  p += RESULTS_PACKED_CITIES_SIZE;
+  r->rows = p;
+  p += RESULTS_ROWS_SIZE;
 
   r->longCities = p;
   p += RESULTS_LONG_CITIES_SIZE;
@@ -552,8 +542,7 @@ void convert_hash_to_results(hash_t *hash, Results *out) {
       out->numLongCities++;
     }
 
-    out->packedCities[offset / SHORT_CITY_LENGTH] = city;
-    out->entries[offset / SHORT_CITY_LENGTH] = (ResultsEntry) {sum, count, min, max};
+    out->rows[offset /  SHORT_CITY_LENGTH] = (ResultsRow) {city, sum, count, min, max};
   }
 }
 
@@ -1018,17 +1007,17 @@ int sort_result(const void *a, const void *b, void *arg) {
   const ResultsRef *left = a;
   const ResultsRef *right = b;
 
-  PackedCity *leftCity = r->packedCities + (left->offset / SHORT_CITY_LENGTH);
-  PackedCity *rightCity = r->packedCities + (right->offset / SHORT_CITY_LENGTH);
+  PackedCity leftCity = r->rows[left->offset / SHORT_CITY_LENGTH].city;
+  PackedCity rightCity = r->rows[right->offset / SHORT_CITY_LENGTH].city;
 
-  char *leftBytes = leftCity->shortCity.bytes;
-  char *rightBytes = rightCity->shortCity.bytes;
+  char *leftBytes = leftCity.shortCity.bytes;
+  char *rightBytes = rightCity.shortCity.bytes;
 
-  if (unlikely(city_is_long(*leftCity))) {
-    leftBytes = r->longCities[leftCity->longRef.index].bytes;
+  if (unlikely(city_is_long(leftCity))) {
+    leftBytes = r->longCities[leftCity.longRef.index].bytes;
   }
-  if (unlikely(city_is_long(*rightCity))) {
-    rightBytes = r->longCities[rightCity->longRef.index].bytes;
+  if (unlikely(city_is_long(rightCity))) {
+    rightBytes = r->longCities[rightCity.longRef.index].bytes;
   }
   return strcmp(leftBytes, rightBytes);
 }
@@ -1042,20 +1031,19 @@ void print_results(Results *results) {
   // result 0 is dummy
   for (int i = 1; i < results->numCities; i++) {
     ResultsRef ref = results->refs[i];
-    PackedCity city = results->packedCities[ref.offset / SHORT_CITY_LENGTH];
-    ResultsEntry entry = results->entries[ref.offset / SHORT_CITY_LENGTH];
+    ResultsRow row = results->rows[ref.offset / SHORT_CITY_LENGTH];
 
-    float sum = entry.sum;
-    float count = entry.count;
-    float min = entry.min * 0.1;
-    float max = entry.max * 0.1;
+    float sum = row.sum;
+    float count = row.count;
+    float min = row.min * 0.1;
+    float max = row.max * 0.1;
 
     const char *bytes;
-    if (unlikely(city_is_long(city))) {
-      bytes = results->longCities[city.longRef.index].bytes;
+    if (unlikely(city_is_long(row.city))) {
+      bytes = results->longCities[row.city.longRef.index].bytes;
     }
     else {
-      bytes = city.shortCity.bytes;
+      bytes = row.city.shortCity.bytes;
     }
     pos += sprintf(buffer + pos, "%s=%.1f/%.1f/%.1f", bytes, min, round(sum/count) * 0.1, max);
 
@@ -1089,28 +1077,27 @@ void debug_results(Results *results) {
   fprintf(stderr, "\n");
   for (int i = 0; i < MIN(10, results->numCities); i++) {
     ResultsRef ref = results->refs[i];
-    PackedCity city = results->packedCities[ref.offset / SHORT_CITY_LENGTH];
-    ResultsEntry entry = results->entries[ref.offset / SHORT_CITY_LENGTH];
+    ResultsRow row = results->rows[ref.offset / SHORT_CITY_LENGTH];
 
     const char *bytes;
-    if (city_is_dummy(city)) {
+    if (city_is_dummy(row.city)) {
       bytes = dummyName;
     }
-    else if (city_is_long(city)) {
-      bytes = results->longCities[city.longRef.index].bytes;
+    else if (city_is_long(row.city)) {
+      bytes = results->longCities[row.city.longRef.index].bytes;
     }
     else {
-      bytes = city.shortCity.bytes;
+      bytes = row.city.shortCity.bytes;
     }
-    fprintf(stderr, "%-100s %12ld %11d %4d %4d\n", bytes, entry.sum, entry.count, entry.min, entry.max);
+    fprintf(stderr, "%-100s %12ld %11d %4d %4d\n", bytes, row.sum, row.count, row.min, row.max);
   }
 
-	long total = 0;
-	for (int i = 0; i < results->numCities; i++) {
+  long total = 0;
+  for (int i = 0; i < results->numCities; i++) {
     ResultsRef ref = results->refs[i];
-    ResultsEntry entry = results->entries[ref.offset / SHORT_CITY_LENGTH];
-	  total += entry.count;
-	}
+    ResultsRow row = results->rows[ref.offset / SHORT_CITY_LENGTH];
+    total += row.count;
+  }
   fprintf(stderr, "total: %ld\n", total);
 }
 
