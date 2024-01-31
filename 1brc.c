@@ -33,7 +33,7 @@
 #define SHORT_CITY_LENGTH 32
 #define LONG_CITY_LENGTH 128
 
-#define HASH_SHIFT 15        // max(desired, log2(MAX_CITIES))
+#define HASH_SHIFT 17        // max(desired, log2(MAX_CITIES))
 #define HASH_LONG_SHIFT 15
 
 #define HASH_ENTRIES      (1 << HASH_SHIFT)
