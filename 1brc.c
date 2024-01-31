@@ -638,39 +638,18 @@ void process_chunk(const char * const restrict base, const unsigned int * offset
 
   alignas(64) long nums[STRIDE];
   alignas(32) unsigned int starts[STRIDE];
-  alignas(32) unsigned int ends[STRIDE];
-  alignas(32) int finished[STRIDE] = {0};
 
+  __m256i starts_v = _mm256_loadu_si256((__m256i *)offsets);
+  __m256i ends_v = _mm256_loadu_si256((__m256i *)(offsets + 1));
+  __m256i finished_v = _mm256_set1_epi32(0);
 
-  for (int i = 0; i < STRIDE; i++) {
-    starts[i] = offsets[i];
-    ends[i] = offsets[i + 1];
-  }
-
-  __m256i starts_v = _mm256_load_si256((__m256i *)starts);
+    _mm256_store_si256((__m256i *)starts, starts_v);
 
   insert_city(hash, hash_city(_mm256_loadu_si256((__m256i *)masked_dummy)), 0, _mm256_loadu_si256((__m256i *)masked_dummy));
 
   while(1) {
-/*
-//    unsigned int tmp[8];
-//    memcpy(tmp, &starts_v, 32);
-   printf("\nstarting:\n");
-   for (int i = 0; i < STRIDE; i++) {
-      printf("%u ", starts[i]);
-//      printf("%u ", tmp[i]);
-    }
-    printf("\n");
-    for (int i = 0; i < STRIDE; i++) {
-      printf("%u ", ends[i]);
-    }
-    printf("\n\n");
-*/
-    __m256i ends_v =  _mm256_load_si256((__m256i *)ends);
     __m256i at_end_mask = _mm256_cmpeq_epi32(starts_v, ends_v);
     if (unlikely(!_mm256_testz_si256(at_end_mask, at_end_mask))) {
-
-      __m256i finished_v = _mm256_load_si256((__m256i *)finished);
       finished_v = _mm256_or_si256(finished_v, at_end_mask);
 
       if (unlikely(_mm256_movemask_epi8(finished_v) == 0xFFFFFFFF)) {
@@ -678,12 +657,10 @@ void process_chunk(const char * const restrict base, const unsigned int * offset
       }
 
       starts_v = _mm256_andnot_si256(finished_v, starts_v);
-      _mm256_store_si256((__m256i *)finished, finished_v);
 
       // wtf, why is this like 10 slower than the masked store
       //_mm256_store_si256((__m256i *)starts, starts_v);
       _mm256_maskstore_epi32((int *)starts, finished_v, starts_v);
-      _mm256_maskstore_epi32((int *)ends, finished_v, _mm256_set1_epi32(PAGE_SIZE));
     }
 
     __m256i rawCity0 = _mm256_loadu_si256((__m256i *)(base + starts[0]));
