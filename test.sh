@@ -25,4 +25,4 @@
 ./1brc samples/measurements-long-same-start.txt    2 2>/dev/null | diff - samples/measurements-long-same-start.out
 ./1brc samples/measurements-10000-unique-keys.txt  1 2>/dev/null | diff - samples/measurements-10000-unique-keys.out
 ./1brc samples/measurements-10000-unique-keys.txt  2 2>/dev/null | diff - samples/measurements-10000-unique-keys.out
-#./1brc measurements_1B.txt                         6 2>/dev/null | diff - measurements_1B.out
+./1brc measurements_1B.txt                         6 2>/dev/null | diff - measurements_1B.out

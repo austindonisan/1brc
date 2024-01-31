@@ -643,7 +643,7 @@ void process_chunk(const char * const restrict base, const unsigned int * offset
   __m256i ends_v = _mm256_loadu_si256((__m256i *)(offsets + 1));
   __m256i finished_v = _mm256_set1_epi32(0);
 
-    _mm256_store_si256((__m256i *)starts, starts_v);
+  _mm256_store_si256((__m256i *)starts, starts_v);
 
   insert_city(hash, hash_city(_mm256_loadu_si256((__m256i *)masked_dummy)), 0, _mm256_loadu_si256((__m256i *)masked_dummy));
 
@@ -657,6 +657,7 @@ void process_chunk(const char * const restrict base, const unsigned int * offset
       }
 
       starts_v = _mm256_andnot_si256(finished_v, starts_v);
+      ends_v = (__m256i)_mm256_blendv_ps((__m256)ends_v, (__m256)_mm256_set1_epi32(PAGE_SIZE), (__m256)finished_v);
 
       // wtf, why is this like 10 slower than the masked store
       //_mm256_store_si256((__m256i *)starts, starts_v);
