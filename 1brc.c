@@ -254,10 +254,10 @@ alignas(32) const char * const masked_dummy = (char []){
  };
 
 alignas(64) const char * const city_mask = (char []){
-   1,  1,  1,  1,  1,  1,  1,  1,
-   1,  1,  1,  1,  1,  1,  1,  1,
-   1,  1,  1,  1,  1,  1,  1,  1,
-   1,  1,  1,  1,  1,  1,  1,  1,
+   0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+   0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+   0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+   0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
    0,  0,  0,  0,  0,  0,  0,  0,
    0,  0,  0,  0,  0,  0,  0,  0,
    0,  0,  0,  0,  0,  0,  0,  0,
@@ -680,14 +680,14 @@ void process_chunk(const char * const restrict base, const unsigned int * offset
     __m256i rawMask6 = _mm256_loadu_si256((__m256i *)(city_mask + 32 - semicolonBytes6));
     __m256i rawMask7 = _mm256_loadu_si256((__m256i *)(city_mask + 32 - semicolonBytes7));
 
-    __m256i maskedCity0 = _mm256_sign_epi8(rawCity0, rawMask0);
-    __m256i maskedCity1 = _mm256_sign_epi8(rawCity1, rawMask1);
-    __m256i maskedCity2 = _mm256_sign_epi8(rawCity2, rawMask2);
-    __m256i maskedCity3 = _mm256_sign_epi8(rawCity3, rawMask3);
-    __m256i maskedCity4 = _mm256_sign_epi8(rawCity4, rawMask4);
-    __m256i maskedCity5 = _mm256_sign_epi8(rawCity5, rawMask5);
-    __m256i maskedCity6 = _mm256_sign_epi8(rawCity6, rawMask6);
-    __m256i maskedCity7 = _mm256_sign_epi8(rawCity7, rawMask7);
+    __m256i maskedCity0 = _mm256_and_si256(rawCity0, rawMask0);
+    __m256i maskedCity1 = _mm256_and_si256(rawCity1, rawMask1);
+    __m256i maskedCity2 = _mm256_and_si256(rawCity2, rawMask2);
+    __m256i maskedCity3 = _mm256_and_si256(rawCity3, rawMask3);
+    __m256i maskedCity4 = _mm256_and_si256(rawCity4, rawMask4);
+    __m256i maskedCity5 = _mm256_and_si256(rawCity5, rawMask5);
+    __m256i maskedCity6 = _mm256_and_si256(rawCity6, rawMask6);
+    __m256i maskedCity7 = _mm256_and_si256(rawCity7, rawMask7);
 
     __m256i semicolons_v = _mm256_set_epi32(semicolonBytes7, semicolonBytes6, semicolonBytes5, semicolonBytes4, semicolonBytes3, semicolonBytes2, semicolonBytes1, semicolonBytes0);
     __m256i longCities = _mm256_cmpeq_epi32(semicolons_v, _mm256_set1_epi32(32));
@@ -874,20 +874,20 @@ __m256i process_long(const char * start, hash_t *h, int *semicolonBytesOut) {
   if (semicolonBytes1 < 32) {
     *semicolonBytesOut = 32 + semicolonBytes1;
     __m256i mask = _mm256_loadu_si256((__m256i *)(city_mask + 32 - semicolonBytes1));
-    seg1 = _mm256_sign_epi8(seg1, mask);
+    seg1 = _mm256_and_si256(seg1, mask);
     seg2 = _mm256_set1_epi8(0);
     seg3 = _mm256_set1_epi8(0);
   }
   else if (semicolonBytes2 < 32) {
     *semicolonBytesOut = 64 + semicolonBytes2;
     __m256i mask = _mm256_loadu_si256((__m256i *)(city_mask + 32 - semicolonBytes2));
-    seg2 = _mm256_sign_epi8(seg2, mask);
+    seg2 = _mm256_and_si256(seg2, mask);
     seg3 = _mm256_set1_epi8(0);
   }
   else {
     *semicolonBytesOut = 96 + semicolonBytes3;
     __m256i mask = _mm256_loadu_si256((__m256i *)(city_mask + 32 - semicolonBytes3));
-    seg3 = _mm256_sign_epi8(seg3, mask);
+    seg3 = _mm256_and_si256(seg3, mask);
   }
 
   int hash = hash_long(*(long *)start, *((long *)start + 1));
