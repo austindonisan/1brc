@@ -141,7 +141,6 @@ inline __m256i hash_cities(__m256i a, __m256i b, __m256i c, __m256i d, __m256i e
 inline int hash_city(__m256i str);
 inline int insert_city(hash_t *h, int hash, int streamIdx, const __m256i maskedCity);
 int insert_city_long(hash_t *h, int hash, __m256i seg0, __m256i seg1, __m256i seg2, __m256i seg3);
-int get_offset(int id, int hash, const __m256i maskedCity, hash_t * h);
 void merge(Results *a, Results *b);
 int sort_result(const void *a, const void *b, void *arg);
 unsigned int find_next_row(const void *data, unsigned int offset);
@@ -951,20 +950,6 @@ __attribute__((always_inline)) inline int insert_city(hash_t *h, int hash, int s
         ((int*)(h->hashed_storage + hash * 4 + i * 16))[3] = MIN_TEMP;
       }
       return hash_to_offset(hash, streamIdx);
-    }
-    hash += SHORT_CITY_LENGTH;
-  }
-}
-
-__attribute__((always_inline)) inline int get_offset(int streamIdx, int hash, const __m256i maskedCity, hash_t * h) {
-  while (1) {
-    __m256i stored = _mm256_load_si256((__m256i *)(h->hashed_cities + hash));
-    __m256i xor = _mm256_xor_si256(maskedCity, stored);
-    if (likely(_mm256_testz_si256(xor, xor))) {
-      return hash_to_offset(hash, streamIdx);
-    }
-    if (_mm256_testz_si256(stored, stored)) {
-      return -1;
     }
     hash += SHORT_CITY_LENGTH;
   }
