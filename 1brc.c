@@ -66,7 +66,6 @@ typedef struct {
   int *packed_offsets;
   char *hashed_cities;
   char *hashed_storage;
-  char *packed_cities_long;
   char *hashed_cities_long;
   int num_cities;
   int num_cities_long;
@@ -216,10 +215,9 @@ void print256(__m256i var);
 #define PACKED_OFFSETS_SIZE     LINE_CEIL(32                * MAX_CITIES)
 #define HASHED_CITIES_SIZE      LINE_CEIL(SHORT_CITY_LENGTH * HASH_LENGTH)
 #define HASHED_DATA_SIZE        LINE_CEIL(HASH_ENTRY_SIZE   * HASH_LENGTH)
-#define PACKED_CITIES_LONG_SIZE LINE_CEIL(LONG_CITY_LENGTH  * MAX_CITIES)
 #define HASHED_CITIES_LONG_SIZE LINE_CEIL(LONG_CITY_LENGTH  * HASH_LONG_LENGTH)
 
-#define HASH_MEMORY_SIZE HUGE_PAGE_CEIL(HASH_SIZE + PACKED_CITIES_SIZE + PACKED_OFFSETS_SIZE + HASHED_CITIES_SIZE + HASHED_DATA_SIZE + PACKED_CITIES_LONG_SIZE + HASHED_CITIES_LONG_SIZE)
+#define HASH_MEMORY_SIZE HUGE_PAGE_CEIL(HASH_SIZE + PACKED_CITIES_SIZE + PACKED_OFFSETS_SIZE + HASHED_CITIES_SIZE + HASHED_DATA_SIZE + HASHED_CITIES_LONG_SIZE)
 
 #define RESULTS_SIZE               LINE_CEIL(sizeof(Results))
 #define RESULTS_REFS_SIZE          LINE_CEIL(sizeof(ResultsRef)  * MAX_CITIES)
@@ -564,9 +562,6 @@ void start_worker(worker_t *w, Results *out) {
 
   hash.hashed_storage = hashData;
   hashData += HASHED_DATA_SIZE;
-
-  hash.packed_cities_long = hashData;
-  hashData += PACKED_CITIES_LONG_SIZE;
 
   hash.hashed_cities_long = hashData;
   hashData += HASHED_CITIES_LONG_SIZE;
@@ -970,11 +965,6 @@ int insert_city_long(hash_t *hash, int hash_value, __m256i seg0, __m256i seg1, _
     }
 
     if (_mm256_testz_si256(stored0, stored0)) {
-      _mm256_store_si256((__m256i *)(hash->packed_cities_long + hash->num_cities_long * LONG_CITY_LENGTH), seg0);
-      _mm256_store_si256((__m256i *)(hash->packed_cities_long + hash->num_cities_long * LONG_CITY_LENGTH) + 1, seg1);
-      _mm256_store_si256((__m256i *)(hash->packed_cities_long + hash->num_cities_long * LONG_CITY_LENGTH) + 2, seg2);
-      _mm256_store_si256((__m256i *)(hash->packed_cities_long + hash->num_cities_long * LONG_CITY_LENGTH) + 3, seg3);
-
       _mm256_store_si256((__m256i *)(hash->hashed_cities_long + hash_value), seg0);
       _mm256_store_si256((__m256i *)(hash->hashed_cities_long + hash_value) + 1, seg1);
       _mm256_store_si256((__m256i *)(hash->hashed_cities_long + hash_value) + 2, seg2);
