@@ -289,7 +289,7 @@ int main(int argc, char** argv) {
     return EXIT_FAILURE;
   }
 
-  const bool warmup = argc < 4 ? false : atoi(argv[3]) != 0;
+  const bool warmup = DEBUG && (argc < 4 ? false : atoi(argv[3]) != 0);
 
   if ((fileStat.st_size - 1) / PAGE_SIZE < num_workers) {
     D(fprintf(stderr, "decreasing num_workers to %ld\n", fileStat.st_size / PAGE_SIZE + 1);)
@@ -585,11 +585,11 @@ void start_worker(worker_t *w, Results *out) {
 
     mmap(data + PAGE_SIZE, mapped_file_length, PROT_READ, MAP_PRIVATE | MAP_FIXED , w->fd, start);
 
-    if (w->warmup) {
+    if (DEBUG && w->warmup) {
       TIMER_RESET();
-     long dummy = 0;
-     for (long i = 0; i < mapped_file_length; i += PAGE_SIZE) {
-       dummy += *(long *)(data + i);
+      long dummy = 0;
+      for (long i = 0; i < mapped_file_length; i += PAGE_SIZE) {
+        dummy += *(long *)(data + i);
       }
       volatile long dummy2 = dummy;
       (void)dummy2;
