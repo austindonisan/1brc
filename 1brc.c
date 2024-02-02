@@ -139,7 +139,7 @@ void process_chunk(const char * const restrict base, const unsigned int * offset
 __m256i process_long(const char * start, hash_t *h, int *semicolonBytesOut);
 inline __m256i hash_cities(__m256i a, __m256i b, __m256i c, __m256i d, __m256i e, __m256i f, __m256i g, __m256i h);
 inline int hash_city(__m256i str);
-inline unsigned long insert_city(hash_t *h, unsigned long hash, unsigned long streamIdx, const __m256i maskedCity);
+inline int insert_city(hash_t *h, int hash, int streamIdx, const __m256i maskedCity);
 int insert_city_long(hash_t *h, int hash, __m256i seg0, __m256i seg1, __m256i seg2, __m256i seg3);
 int get_offset(int id, int hash, const __m256i maskedCity, hash_t * h);
 void merge(Results *a, Results *b);
@@ -147,7 +147,7 @@ int sort_result(const void *a, const void *b, void *arg);
 unsigned int find_next_row(const void *data, unsigned int offset);
 void print_results(Results *results);
 void debug_results(Results *results);
-inline unsigned long hash_to_offset(unsigned long hash, unsigned long streamIdx);
+inline int hash_to_offset(int hash, int streamIdx);
 inline __m256i city_from_long_hash(int hashValue);
 inline int long_hash_from_city(__m256i city);
 inline void setup_results(Results *r);
@@ -197,7 +197,7 @@ void print256(__m256i var);
 #define LINE_TRUNC(v) ((v) & (LINE_MASK))
 #define LINE_CEIL(v)  (LINE_TRUNC(v + LINE_SIZE - 1))
 
-#define HASH_ENTRY_SIZE (STRIDE * sizeof(hash_entry_t))
+#define HASH_ENTRY_SIZE ((int)(STRIDE * sizeof(hash_entry_t)))
 
 #define HASH_DATA_OFFSET 5        // log2(HASH_DATA_ENTRY_WIDTH)
 #define HASH_CITY_OFFSET 5        // log2(SHORT_CITY_LENGTH)
@@ -239,7 +239,7 @@ void print256(__m256i var);
 #define SUM_SIGN_BIT (1L << (SUM_BITS))
 #define COUNT_BITS_START (SUM_BITS + 1)
 
-#define EXTRACT_COUNT(v) (v >> COUNT_BITS_START)
+#define EXTRACT_COUNT(v) ((int)(v >> COUNT_BITS_START))
 #define SUM_MASK ((1L << COUNT_BITS_START) - 1)
 #define EXTRACT_SUM(v) ((v & SUM_MASK) - SUM_SIGN_BIT)
 
@@ -519,7 +519,7 @@ void convert_hash_to_results(hash_t *hash, Results *out) {
   for (int i = 0; i < hash->num_cities; i++) {
     PackedCity city = { .reg = _mm256_load_si256((__m256i *)(hash->packed_cities + i * SHORT_CITY_LENGTH))};
     int offset = hash->packed_offsets[i];
-    HashRow *rows = (HashRow *)(hash->hashed_storage + offset * (HASH_ENTRY_SIZE / SHORT_CITY_LENGTH));
+    HashRow *rows = (HashRow *)(hash->hashed_storage + offset * (int)(HASH_ENTRY_SIZE / SHORT_CITY_LENGTH));
 
     long sum  = EXTRACT_SUM(rows[0].packedSumCount);
     int count = EXTRACT_COUNT(rows[0].packedSumCount);
@@ -795,14 +795,14 @@ void process_chunk(const char * const restrict base, const unsigned int * offset
     mulled = _mm256_srli_epi32(mulled, 22);
     __m256i final = _mm256_sign_epi32(mulled, minus_mask);
 
-    unsigned long offset0 = insert_city(hash, _mm256_extract_epi32(city_hashes, 0), 0, maskedCity0);
-    unsigned long offset1 = insert_city(hash, _mm256_extract_epi32(city_hashes, 4), 1, maskedCity1);
-    unsigned long offset2 = insert_city(hash, _mm256_extract_epi32(city_hashes, 1), 2, maskedCity2);
-    unsigned long offset3 = insert_city(hash, _mm256_extract_epi32(city_hashes, 5), 3, maskedCity3);
-    unsigned long offset4 = insert_city(hash, _mm256_extract_epi32(city_hashes, 2), 4, maskedCity4);
-    unsigned long offset5 = insert_city(hash, _mm256_extract_epi32(city_hashes, 6), 5, maskedCity5);
-    unsigned long offset6 = insert_city(hash, _mm256_extract_epi32(city_hashes, 3), 6, maskedCity6);
-    unsigned long offset7 = insert_city(hash, _mm256_extract_epi32(city_hashes, 7), 7, maskedCity7);
+    int offset0 = insert_city(hash, _mm256_extract_epi32(city_hashes, 0), 0, maskedCity0);
+    int offset1 = insert_city(hash, _mm256_extract_epi32(city_hashes, 4), 1, maskedCity1);
+    int offset2 = insert_city(hash, _mm256_extract_epi32(city_hashes, 1), 2, maskedCity2);
+    int offset3 = insert_city(hash, _mm256_extract_epi32(city_hashes, 5), 3, maskedCity3);
+    int offset4 = insert_city(hash, _mm256_extract_epi32(city_hashes, 2), 4, maskedCity4);
+    int offset5 = insert_city(hash, _mm256_extract_epi32(city_hashes, 6), 5, maskedCity5);
+    int offset6 = insert_city(hash, _mm256_extract_epi32(city_hashes, 3), 6, maskedCity6);
+    int offset7 = insert_city(hash, _mm256_extract_epi32(city_hashes, 7), 7, maskedCity7);
 
     __m256i ae = _mm256_set_m128i(_mm_load_si128((__m128i *)(values_map + offset4)), _mm_load_si128((__m128i *)(values_map + offset0)));
     __m256i bf = _mm256_set_m128i(_mm_load_si128((__m128i *)(values_map + offset5)), _mm_load_si128((__m128i *)(values_map + offset1)));
@@ -930,7 +930,7 @@ __attribute__((always_inline)) inline int hash_city(__m256i str) {
   return _mm256_extract_epi32(hash, 0);
 }
 
-__attribute__((always_inline)) inline unsigned long insert_city(hash_t *h, unsigned long hash, unsigned long streamIdx, const __m256i maskedCity) {
+__attribute__((always_inline)) inline int insert_city(hash_t *h, int hash, int streamIdx, const __m256i maskedCity) {
 
   while (1) {
     __m256i stored = _mm256_load_si256((__m256i *)(h->hashed_cities + hash));
@@ -1112,8 +1112,8 @@ __attribute__((always_inline)) inline int long_hash_from_city(__m256i city) {
   return -1;
 }
 
-__attribute__((always_inline)) inline unsigned long hash_to_offset(unsigned long hash, unsigned long streamIdx) {
-  return hash * (HASH_ENTRY_SIZE / SHORT_CITY_LENGTH) + streamIdx * sizeof(hash_entry_t);
+__attribute__((always_inline)) inline int hash_to_offset(int hash, int streamIdx) {
+  return hash * (int)(HASH_ENTRY_SIZE / SHORT_CITY_LENGTH) + streamIdx * (int)sizeof(hash_entry_t);
 }
 
 __attribute__((always_inline)) inline bool city_is_long(PackedCity city) {
