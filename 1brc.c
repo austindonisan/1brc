@@ -621,19 +621,22 @@ void process_chunk(const char * const restrict base, const unsigned int * offset
 
   alignas(64) long nums[STRIDE];
   alignas(32) unsigned int starts[STRIDE];
+  bool checkFinished;
 
   __m256i starts_v = _mm256_loadu_si256((__m256i *)offsets);
   __m256i ends_v = _mm256_loadu_si256((__m256i *)(offsets + 1));
   __m256i finished_v = _mm256_set1_epi32(0);
+
+  __m256i atEndMask = _mm256_cmpeq_epi32(starts_v, ends_v);
+  checkFinished = !_mm256_testz_si256(atEndMask, atEndMask);
 
   _mm256_store_si256((__m256i *)starts, starts_v);
 
   insert_city(hash, hash_city(_mm256_loadu_si256((__m256i *)masked_dummy)), 0, _mm256_loadu_si256((__m256i *)masked_dummy));
 
   while(1) {
-    __m256i at_end_mask = _mm256_cmpeq_epi32(starts_v, ends_v);
-    if (unlikely(!_mm256_testz_si256(at_end_mask, at_end_mask))) {
-      finished_v = _mm256_or_si256(finished_v, at_end_mask);
+    if (unlikely(checkFinished)) {
+      finished_v = _mm256_or_si256(finished_v, atEndMask);
 
       if (unlikely(_mm256_movemask_epi8(finished_v) == 0xFFFFFFFF)) {
         return;
@@ -784,6 +787,9 @@ void process_chunk(const char * const restrict base, const unsigned int * offset
     starts_v = _mm256_add_epi32(starts_v, minus_mask_shift);
     starts_v = _mm256_sub_epi32(starts_v, newline_mask_shift);
     _mm256_store_si256((__m256i *)(starts), starts_v);
+
+    atEndMask = _mm256_cmpeq_epi32(starts_v, ends_v);
+    checkFinished = !_mm256_testz_si256(atEndMask, atEndMask);
 
     mulled = _mm256_slli_epi32(mulled, 14);
     mulled = _mm256_srli_epi32(mulled, 22);
