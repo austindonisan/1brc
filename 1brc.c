@@ -693,35 +693,35 @@ void process_chunk(const char * const restrict base, const unsigned int * offset
     __m256i longCities = _mm256_cmpeq_epi32(semicolons_v, _mm256_set1_epi32(32));
 
     if (unlikely(!_mm256_testz_si256(longCities, longCities))) {
-      if (unlikely(semicolonBytes0 == 32)) {
+      if (semicolonBytes0 == 32) {
         maskedCity0 = process_long(base +  starts[0], hash, &semicolonBytes0);
         semicolons_v = _mm256_insert_epi32(semicolons_v, semicolonBytes0, 0);
       }
-      if (unlikely(semicolonBytes1 == 32)) {
+      if (semicolonBytes1 == 32) {
         maskedCity1 = process_long(base +  starts[1], hash, &semicolonBytes1);
         semicolons_v = _mm256_insert_epi32(semicolons_v, semicolonBytes1, 1);
       }
-      if (unlikely(semicolonBytes2 == 32)) {
+      if (semicolonBytes2 == 32) {
         maskedCity2 = process_long(base +  starts[2], hash, &semicolonBytes2);
         semicolons_v = _mm256_insert_epi32(semicolons_v, semicolonBytes2, 2);
       }
-      if (unlikely(semicolonBytes3 == 32)) {
+      if (semicolonBytes3 == 32) {
         maskedCity3 = process_long(base +  starts[3], hash, &semicolonBytes3);
         semicolons_v = _mm256_insert_epi32(semicolons_v, semicolonBytes3, 3);
       }
-      if (unlikely(semicolonBytes4 == 32)) {
+      if (semicolonBytes4 == 32) {
         maskedCity4 = process_long(base +  starts[4], hash, &semicolonBytes4);
         semicolons_v = _mm256_insert_epi32(semicolons_v, semicolonBytes4, 4);
       }
-      if (unlikely(semicolonBytes5 == 32)) {
+      if (semicolonBytes5 == 32) {
         maskedCity5 = process_long(base +  starts[5], hash, &semicolonBytes5);
         semicolons_v = _mm256_insert_epi32(semicolons_v, semicolonBytes5, 5);
       }
-      if (unlikely(semicolonBytes6 == 32)) {
+      if (semicolonBytes6 == 32) {
         maskedCity6 = process_long(base +  starts[6], hash, &semicolonBytes6);
         semicolons_v = _mm256_insert_epi32(semicolons_v, semicolonBytes6, 6);
       }
-      if (unlikely(semicolonBytes7 == 32)) {
+      if (semicolonBytes7 == 32) {
         maskedCity7 = process_long(base +  starts[7], hash, &semicolonBytes7);
         semicolons_v = _mm256_insert_epi32(semicolons_v, semicolonBytes7, 7);
       }
