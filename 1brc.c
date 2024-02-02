@@ -902,8 +902,8 @@ __attribute__((always_inline)) inline __m256i hash_cities(__m256i a, __m256i b, 
   __m256i egfh = _mm256_blend_epi32(ef, gh, 0xCC);
 
   // preserve nibbles
-  __m256i acbd2 = _mm256_srli_epi64(acbd, 31);
-  __m256i egfh2 = _mm256_srli_epi64(egfh, 31);
+  __m256i acbd2 = _mm256_srli_epi64(acbd, 28);
+  __m256i egfh2 = _mm256_srli_epi64(egfh, 28);
 
   // A_C_D_B_
   // E_G_F_H_
