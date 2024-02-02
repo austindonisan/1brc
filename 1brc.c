@@ -918,7 +918,6 @@ __attribute__((always_inline)) inline __m256i hash_cities(__m256i a, __m256i b, 
   __m256i acegbdfh = (__m256i) _mm256_shuffle_ps((__m256)acbd, (__m256)egfh, 0x88);
 
   __m256i hash = _mm256_madd_epi16(acegbdfh, acegbdfh);
-  hash = _mm256_xor_si256(hash, acegbdfh);
   __m256i hash_mask = _mm256_set1_epi32(HASH_SHORT_MASK);
   return _mm256_and_si256(hash, hash_mask);
 }
