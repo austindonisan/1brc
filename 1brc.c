@@ -138,7 +138,7 @@ void process_chunk(const char * const restrict base, const unsigned int * offset
 __m256i process_long(const char * start, hash_t *h, int *semicolonBytesOut);
 inline __m256i hash_cities(__m256i a, __m256i b, __m256i c, __m256i d, __m256i e, __m256i f, __m256i g, __m256i h);
 inline int hash_city(__m256i str);
-inline int insert_city(hash_t *h, int hash, const __m256i maskedCity);
+inline long insert_city(hash_t *h, long hash, const __m256i maskedCity);
 int insert_city_long(hash_t *h, int hash, __m256i seg0, __m256i seg1, __m256i seg2, __m256i seg3);
 void merge(Results *a, Results *b);
 int sort_result(const void *a, const void *b, void *arg);
@@ -795,14 +795,14 @@ void process_chunk(const char * const restrict base, const unsigned int * offset
     mulled = _mm256_srli_epi32(mulled, 22);
     __m256i final = _mm256_sign_epi32(mulled, minus_mask);
 
-    int hash0 = insert_city(hash, _mm256_extract_epi32(city_hashes, 0), maskedCity0);
-    int hash1 = insert_city(hash, _mm256_extract_epi32(city_hashes, 4), maskedCity1);
-    int hash2 = insert_city(hash, _mm256_extract_epi32(city_hashes, 1), maskedCity2);
-    int hash3 = insert_city(hash, _mm256_extract_epi32(city_hashes, 5), maskedCity3);
-    int hash4 = insert_city(hash, _mm256_extract_epi32(city_hashes, 2), maskedCity4);
-    int hash5 = insert_city(hash, _mm256_extract_epi32(city_hashes, 6), maskedCity5);
-    int hash6 = insert_city(hash, _mm256_extract_epi32(city_hashes, 3), maskedCity6);
-    int hash7 = insert_city(hash, _mm256_extract_epi32(city_hashes, 7), maskedCity7);
+    long hash0 = insert_city(hash, _mm256_extract_epi32(city_hashes, 0), maskedCity0);
+    long hash1 = insert_city(hash, _mm256_extract_epi32(city_hashes, 4), maskedCity1);
+    long hash2 = insert_city(hash, _mm256_extract_epi32(city_hashes, 1), maskedCity2);
+    long hash3 = insert_city(hash, _mm256_extract_epi32(city_hashes, 5), maskedCity3);
+    long hash4 = insert_city(hash, _mm256_extract_epi32(city_hashes, 2), maskedCity4);
+    long hash5 = insert_city(hash, _mm256_extract_epi32(city_hashes, 6), maskedCity5);
+    long hash6 = insert_city(hash, _mm256_extract_epi32(city_hashes, 3), maskedCity6);
+    long hash7 = insert_city(hash, _mm256_extract_epi32(city_hashes, 7), maskedCity7);
 
     __m256i ae = _mm256_set_m128i(_mm_load_si128((__m128i *)(values_map + hash4 * 4 + 4*16)), _mm_load_si128((__m128i *)(values_map + hash0 * 4 + 0*16)));
     __m256i bf = _mm256_set_m128i(_mm_load_si128((__m128i *)(values_map + hash5 * 4 + 5*16)), _mm_load_si128((__m128i *)(values_map + hash1 * 4 + 1*16)));
@@ -929,7 +929,7 @@ __attribute__((always_inline)) inline int hash_city(__m256i str) {
   return _mm256_extract_epi32(hash, 0);
 }
 
-__attribute__((always_inline)) inline int insert_city(hash_t *h, int hash, const __m256i maskedCity) {
+__attribute__((always_inline)) inline long insert_city(hash_t *h, long hash, const __m256i maskedCity) {
 
   while (1) {
     __m256i stored = _mm256_load_si256((__m256i *)(h->hashed_cities + hash));
