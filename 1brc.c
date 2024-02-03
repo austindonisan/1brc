@@ -76,6 +76,7 @@ typedef struct {
   long end;
   int fd;
   int worker_id;
+  int cpuId;
   bool fork;
   bool warmup;
   bool first;
@@ -327,11 +328,27 @@ int main(int argc, char** argv) {
 }
 
 void prep_workers(worker_t *workers, int num_workers, bool warmup, int fd, struct stat *fileStat) {
+  cpu_set_t cpuset;
+  CPU_ZERO(&cpuset);
+  sched_getaffinity(0, sizeof(cpu_set_t), &cpuset);
+  int numCpus = CPU_COUNT(&cpuset);
+
+  if (numCpus < num_workers) {
+    fprintf(stderr, "%d threads is less than %d available CPUS\n", num_workers, numCpus);
+    exit(1);
+  }
+
+  long cpu = 0;
   long start = 0;
   long delta = PAGE_TRUNC(fileStat->st_size / num_workers);
   for (int i = 0; i < num_workers; i++) {
+    while (!CPU_ISSET(cpu, &cpuset)) {
+      cpu++;
+    }
+
     worker_t *w = workers + i;
     w->worker_id = i;
+    w->cpuId = cpu++;
     w->fd = fd;
     w->start = start;
     w->end = (start += delta);
@@ -436,7 +453,7 @@ void process(int id, worker_t * workers, int num_workers, int fdOut, Results *ou
         if (PIN_CPU) {
           cpu_set_t cpu_set;
           CPU_ZERO(&cpu_set);
-          CPU_SET(new_id, &cpu_set);
+          CPU_SET(workers[new_id].cpuId, &cpu_set);
           if (sched_setaffinity(0, sizeof(cpu_set_t), &cpu_set) == -1) {
             perror("sched_setaffinity");
           }
