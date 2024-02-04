@@ -967,11 +967,12 @@ __attribute__((always_inline)) inline long insert_city(hash_t * restrict h, long
       h->packed_offsets[h->num_cities] = hash;
       h->num_cities += 1;
 
-      for (int i = 0; i < STRIDE; i++) {
-        ((long*)(h->hashed_storage + hash * 4 + i * 16))[0] = SUM_SIGN_BIT;
-        ((int*)(h->hashed_storage + hash * 4 + i * 16))[2] = MAX_TEMP;
-        ((int*)(h->hashed_storage + hash * 4 + i * 16))[3] = MIN_TEMP;
-      }
+      __m256i initData = _mm256_set_epi32(MIN_TEMP, MAX_TEMP, SUM_SIGN_BIT >> 32, 0,
+                                          MIN_TEMP, MAX_TEMP, SUM_SIGN_BIT >> 32, 0);
+      _mm256_store_si256((__m256i *)(h->hashed_storage + hash * 4), initData);
+      _mm256_store_si256((__m256i *)(h->hashed_storage + hash * 4) + 1, initData);
+      _mm256_store_si256((__m256i *)(h->hashed_storage + hash * 4) + 2, initData);
+      _mm256_store_si256((__m256i *)(h->hashed_storage + hash * 4) + 3, initData);
       return hash;
     }
     hash += SHORT_CITY_LENGTH;
