@@ -1,4 +1,3 @@
-#define _DEFAULT_SOURCE
 #define _GNU_SOURCE
 #include <fcntl.h>
 #include <features.h>
@@ -6,36 +5,38 @@
 #include <limits.h>
 #include <math.h>
 #include <poll.h>
+#include <sched.h>
 #include <stdalign.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
-#include <unistd.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <time.h>
+#include <unistd.h>
 #include <x86intrin.h>
-#include <sched.h>
 
 /*
- * Wait() for all child processes before exiting.
- * This avoids the default "cheating" of returning before all memory is unmapped.
+ * wait() for all child processes before exiting.
+ * If 0, instead "cheat" by returning immediately, leaving orphan processes.
  */
 #define UNMAP 0
 
 /*
- * Pin worker threads to the CPU number matching their ID of [0-n).
+ * Pin worker threads to a CPU.
  * Very helpfuly at high core counts, slightly harmful at low ones.
- * If using a hyperthreaded CPU first ensure that logical CPU numbers aren't interleaved.
+ *
+ * Each worker is assigned to the lowest unused CPU # we're scheduled for.
+ * For hyperthreaded CPUs, logical CPU numbers must not be interleaved.
  */
 #define PIN_CPU 1
 
 /*
- * Print timing information and city summary to stderr
+ * Print timing information and city summary to stderr.
  */
 #define DEBUG 0
 
