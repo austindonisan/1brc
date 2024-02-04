@@ -677,11 +677,6 @@ void process_chunk(const char * const restrict base, const unsigned int * offset
     __m256i rawCity6 = _mm256_loadu_si256((__m256i *)(base + starts[6]));
     __m256i rawCity7 = _mm256_loadu_si256((__m256i *)(base + starts[7]));
 
-    for (int i = 0; i < STRIDE; i++) {
-      _mm_prefetch(base + starts[i] + 95, _MM_HINT_NTA);
-      _mm_prefetch(base + starts[i] + 159, _MM_HINT_NTA);
-    }
-
     int semicolonBytes0 = _tzcnt_u32(_mm256_movemask_epi8(_mm256_cmpeq_epi8(rawCity0, _mm256_set1_epi8(';'))));
     int semicolonBytes1 = _tzcnt_u32(_mm256_movemask_epi8(_mm256_cmpeq_epi8(rawCity1, _mm256_set1_epi8(';'))));
     int semicolonBytes2 = _tzcnt_u32(_mm256_movemask_epi8(_mm256_cmpeq_epi8(rawCity2, _mm256_set1_epi8(';'))));
@@ -690,6 +685,16 @@ void process_chunk(const char * const restrict base, const unsigned int * offset
     int semicolonBytes5 = _tzcnt_u32(_mm256_movemask_epi8(_mm256_cmpeq_epi8(rawCity5, _mm256_set1_epi8(';'))));
     int semicolonBytes6 = _tzcnt_u32(_mm256_movemask_epi8(_mm256_cmpeq_epi8(rawCity6, _mm256_set1_epi8(';'))));
     int semicolonBytes7 = _tzcnt_u32(_mm256_movemask_epi8(_mm256_cmpeq_epi8(rawCity7, _mm256_set1_epi8(';'))));
+
+    // 127 keeps the the opcode small
+    _mm_prefetch(base + starts[0] + semicolonBytes0 + 127, _MM_HINT_NTA);
+    _mm_prefetch(base + starts[1] + semicolonBytes1 + 127, _MM_HINT_NTA);
+    _mm_prefetch(base + starts[2] + semicolonBytes2 + 127, _MM_HINT_NTA);
+    _mm_prefetch(base + starts[3] + semicolonBytes3 + 127, _MM_HINT_NTA);
+    _mm_prefetch(base + starts[4] + semicolonBytes4 + 127, _MM_HINT_NTA);
+    _mm_prefetch(base + starts[5] + semicolonBytes5 + 127, _MM_HINT_NTA);
+    _mm_prefetch(base + starts[6] + semicolonBytes6 + 127, _MM_HINT_NTA);
+    _mm_prefetch(base + starts[7] + semicolonBytes7 + 127, _MM_HINT_NTA);
 
     __m256i rawMask0 = _mm256_loadu_si256((__m256i *)(city_mask + 32 - semicolonBytes0));
     __m256i rawMask1 = _mm256_loadu_si256((__m256i *)(city_mask + 32 - semicolonBytes1));
@@ -819,19 +824,33 @@ void process_chunk(const char * const restrict base, const unsigned int * offset
     __m256i final = _mm256_sign_epi32(mulled, minus_mask);
 
     long hash0 = insert_city(hash, _mm256_extract_epi32(city_hashes, 0), maskedCity0);
-    long hash1 = insert_city(hash, _mm256_extract_epi32(city_hashes, 4), maskedCity1);
-    long hash2 = insert_city(hash, _mm256_extract_epi32(city_hashes, 1), maskedCity2);
-    long hash3 = insert_city(hash, _mm256_extract_epi32(city_hashes, 5), maskedCity3);
+    __m128i vals0 = _mm_load_si128((__m128i *)(values_map + hash0 * 4 + 0*16));
+
     long hash4 = insert_city(hash, _mm256_extract_epi32(city_hashes, 2), maskedCity4);
+    __m128i vals4 = _mm_load_si128((__m128i *)(values_map + hash4 * 4 + 4*16));
+
+    long hash1 = insert_city(hash, _mm256_extract_epi32(city_hashes, 4), maskedCity1);
+    __m128i vals1 = _mm_load_si128((__m128i *)(values_map + hash1 * 4 + 1*16));
+
     long hash5 = insert_city(hash, _mm256_extract_epi32(city_hashes, 6), maskedCity5);
+    __m128i vals5 = _mm_load_si128((__m128i *)(values_map + hash5 * 4 + 5*16));
+
+    long hash2 = insert_city(hash, _mm256_extract_epi32(city_hashes, 1), maskedCity2);
+    __m128i vals2 = _mm_load_si128((__m128i *)(values_map + hash2 * 4 + 2*16));
+
     long hash6 = insert_city(hash, _mm256_extract_epi32(city_hashes, 3), maskedCity6);
+    __m128i vals6 = _mm_load_si128((__m128i *)(values_map + hash6 * 4 + 6*16));
+
+    long hash3 = insert_city(hash, _mm256_extract_epi32(city_hashes, 5), maskedCity3);
+    __m128i vals3 = _mm_load_si128((__m128i *)(values_map + hash3 * 4 + 3*16));
+
     long hash7 = insert_city(hash, _mm256_extract_epi32(city_hashes, 7), maskedCity7);
+    __m128i vals7 = _mm_load_si128((__m128i *)(values_map + hash7 * 4 + 7*16));
 
-    __m256i ae = _mm256_set_m128i(_mm_load_si128((__m128i *)(values_map + hash4 * 4 + 4*16)), _mm_load_si128((__m128i *)(values_map + hash0 * 4 + 0*16)));
-    __m256i bf = _mm256_set_m128i(_mm_load_si128((__m128i *)(values_map + hash5 * 4 + 5*16)), _mm_load_si128((__m128i *)(values_map + hash1 * 4 + 1*16)));
-    __m256i cg = _mm256_set_m128i(_mm_load_si128((__m128i *)(values_map + hash6 * 4 + 6*16)), _mm_load_si128((__m128i *)(values_map + hash2 * 4 + 2*16)));
-    __m256i dh = _mm256_set_m128i(_mm_load_si128((__m128i *)(values_map + hash7 * 4 + 7*16)), _mm_load_si128((__m128i *)(values_map + hash3 * 4 + 3*16)));
-
+    __m256i ae = _mm256_set_m128i(vals4, vals0);
+    __m256i bf = _mm256_set_m128i(vals5, vals1);
+    __m256i cg = _mm256_set_m128i(vals6, vals2);
+    __m256i dh = _mm256_set_m128i(vals7, vals3);
 
     __m256i abef_low = _mm256_unpacklo_epi64(ae, bf);
     __m256i cdgh_low = _mm256_unpacklo_epi64(cg, dh);
