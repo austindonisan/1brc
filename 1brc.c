@@ -63,11 +63,11 @@ typedef struct {
 } hash_entry_t;
 
 typedef struct {
-  char *packed_cities;
-  int *packed_offsets;
-  char *hashed_cities;
-  char *hashed_storage;
-  char *hashed_cities_long;
+  char * restrict packed_cities;
+  int * restrict packed_offsets;
+  char * restrict hashed_cities;
+  char * restrict hashed_storage;
+  char * restrict hashed_cities_long;
   int num_cities;
   int num_cities_long;
 } hash_t;
@@ -128,21 +128,21 @@ typedef struct {
 typedef struct {
   int numCities;
   int numLongCities;
-  ResultsRef *refs;
-  ResultsRow *rows;
-  LongCity *longCities;
+  ResultsRef * restrict refs;
+  ResultsRow * restrict rows;
+  LongCity * restrict longCities;
 } Results;
 
 void prep_workers(worker_t *workers, int num_workers, bool warmup, int fd, struct stat *fileStat);
 void process(int id, worker_t * workers, int num_workers, int fd, Results *out);
 void start_worker(worker_t *w, Results *out);
 void process_chunk(const char * const restrict base, const unsigned int * offsets, hash_t * restrict h);
-__m256i process_long(const char * start, hash_t *h, int *semicolonBytesOut);
+__m256i process_long(const char * start, hash_t * restrict h, int * restrict semicolonBytesOut);
 inline __m256i hash_cities(__m256i a, __m256i b, __m256i c, __m256i d, __m256i e, __m256i f, __m256i g, __m256i h);
 inline int hash_city(__m256i str);
-inline long insert_city(hash_t *h, long hash, const __m256i maskedCity);
-int insert_city_long(hash_t *h, int hash, __m256i seg0, __m256i seg1, __m256i seg2, __m256i seg3);
-void merge(Results *a, Results *b);
+inline long insert_city(hash_t * restrict h, long hash, const __m256i maskedCity);
+int insert_city_long(hash_t * restrict h, int hash, __m256i seg0, __m256i seg1, __m256i seg2, __m256i seg3);
+void merge(Results * restrict dst, Results * restrict src);
 int sort_result(const void *a, const void *b, void *arg);
 unsigned int find_next_row(const void *data, unsigned int offset);
 void print_results(Results *results);
@@ -371,7 +371,7 @@ inline bool long_city_equal(LongCity *a, LongCity *b) {
   return _mm256_testz_si256(xor0, xor0) && _mm256_testz_si256(xor1, xor1) && _mm256_testz_si256(xor2, xor2) && _mm256_testz_si256(xor3, xor3);
 }
 
-void merge(Results *dst, Results *src) {
+void merge(Results * restrict dst, Results * restrict src) {
   for (int i = 0; i < src->numCities; i++) {
     ResultsRef ref = src->refs[i];
     ResultsRow row = src->rows[ref.offset / SHORT_CITY_LENGTH];
@@ -527,7 +527,7 @@ void setup_results(Results *r) {
 
 }
 
-void convert_hash_to_results(hash_t *hash, Results *out) {
+void convert_hash_to_results(hash_t * restrict hash, Results * restrict out) {
   out->numCities = hash->num_cities;
   out->numLongCities = 0;
 
@@ -885,7 +885,7 @@ int hash_long(long x, long y) {
   long seed = 0x9e3779b97f4a7c15;
   return ((_lrotl(x * seed, 5) ^ y) * seed) & HASH_LONG_MASK;
 }
-__m256i process_long(const char * start, hash_t *h, int *semicolonBytesOut) {
+__m256i process_long(const char * start, hash_t * restrict h, int * restrict semicolonBytesOut) {
   __m256i seg0 = _mm256_loadu_si256((__m256i *)start);
   __m256i seg1 = _mm256_loadu_si256((__m256i *)start + 1);
   __m256i seg2 = _mm256_loadu_si256((__m256i *)start + 2);
@@ -952,7 +952,7 @@ __attribute__((always_inline)) inline int hash_city(__m256i str) {
   return _mm256_extract_epi32(hash, 0);
 }
 
-__attribute__((always_inline)) inline long insert_city(hash_t *h, long hash, const __m256i maskedCity) {
+__attribute__((always_inline)) inline long insert_city(hash_t * restrict h, long hash, const __m256i maskedCity) {
 
   while (1) {
     __m256i stored = _mm256_load_si256((__m256i *)(h->hashed_cities + hash));
@@ -978,7 +978,7 @@ __attribute__((always_inline)) inline long insert_city(hash_t *h, long hash, con
   }
 }
 
-int insert_city_long(hash_t *hash, int hash_value, __m256i seg0, __m256i seg1, __m256i seg2, __m256i seg3) {
+int insert_city_long(hash_t * restrict hash, int hash_value, __m256i seg0, __m256i seg1, __m256i seg2, __m256i seg3) {
   while (1) {
     __m256i stored0 = _mm256_loadu_si256((__m256i *)(hash->hashed_cities_long + hash_value));
     __m256i stored1 = _mm256_loadu_si256((__m256i *)(hash->hashed_cities_long + hash_value) + 1);
