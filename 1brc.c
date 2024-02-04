@@ -677,6 +677,11 @@ void process_chunk(const char * const restrict base, const unsigned int * offset
     __m256i rawCity6 = _mm256_loadu_si256((__m256i *)(base + starts[6]));
     __m256i rawCity7 = _mm256_loadu_si256((__m256i *)(base + starts[7]));
 
+    for (int i = 0; i < STRIDE; i++) {
+      _mm_prefetch(base + starts[i] + 95, _MM_HINT_NTA);
+      _mm_prefetch(base + starts[i] + 159, _MM_HINT_NTA);
+    }
+
     int semicolonBytes0 = _tzcnt_u32(_mm256_movemask_epi8(_mm256_cmpeq_epi8(rawCity0, _mm256_set1_epi8(';'))));
     int semicolonBytes1 = _tzcnt_u32(_mm256_movemask_epi8(_mm256_cmpeq_epi8(rawCity1, _mm256_set1_epi8(';'))));
     int semicolonBytes2 = _tzcnt_u32(_mm256_movemask_epi8(_mm256_cmpeq_epi8(rawCity2, _mm256_set1_epi8(';'))));
