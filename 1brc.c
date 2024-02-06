@@ -63,11 +63,15 @@ typedef struct {
 } hash_entry_t;
 
 typedef struct {
-  char * restrict packed_cities;
-  int * restrict packed_offsets;
-  char * restrict hashed_cities;
-  char * restrict hashed_storage;
-  char * restrict hashed_cities_long;
+  char * const restrict packedCities;
+  int * const restrict packedOffsets;
+  char * const restrict hashedCities;
+  char * const restrict hashedStorage;
+  char * const restrict hashedCitiesLong;
+} HashPointers;
+
+typedef struct {
+  const HashPointers p;
   int num_cities;
   int num_cities_long;
 } hash_t;
@@ -215,13 +219,13 @@ void print256(__m256i var);
 #define HASH_LONG_LENGTH (1 << HASH_LONG_SHIFT)
 
 #define HASH_SIZE               LINE_CEIL(sizeof(hash_t))
-#define PACKED_CITIES_SIZE      LINE_CEIL(SHORT_CITY_LENGTH * MAX_CITIES)
-#define PACKED_OFFSETS_SIZE     LINE_CEIL(32                * MAX_CITIES)
-#define HASHED_CITIES_SIZE      LINE_CEIL(SHORT_CITY_LENGTH * HASH_LENGTH)
+#define packedCities_SIZE      LINE_CEIL(SHORT_CITY_LENGTH * MAX_CITIES)
+#define packedOffsets_SIZE     LINE_CEIL(32                * MAX_CITIES)
+#define hashedCities_SIZE      LINE_CEIL(SHORT_CITY_LENGTH * HASH_LENGTH)
 #define HASHED_DATA_SIZE        LINE_CEIL(HASH_ENTRY_SIZE   * HASH_LENGTH)
-#define HASHED_CITIES_LONG_SIZE LINE_CEIL(LONG_CITY_LENGTH  * HASH_LONG_LENGTH)
+#define hashedCitiesLong_SIZE LINE_CEIL(LONG_CITY_LENGTH  * HASH_LONG_LENGTH)
 
-#define HASH_MEMORY_SIZE HUGE_PAGE_CEIL(HASH_SIZE + PACKED_CITIES_SIZE + PACKED_OFFSETS_SIZE + HASHED_CITIES_SIZE + HASHED_DATA_SIZE + HASHED_CITIES_LONG_SIZE)
+#define HASH_MEMORY_SIZE HUGE_PAGE_CEIL(HASH_SIZE + packedCities_SIZE + packedOffsets_SIZE + hashedCities_SIZE + HASHED_DATA_SIZE + hashedCitiesLong_SIZE)
 
 #define RESULTS_SIZE               LINE_CEIL(sizeof(Results))
 #define RESULTS_REFS_SIZE          LINE_CEIL(sizeof(ResultsRef)  * MAX_CITIES)
@@ -534,9 +538,9 @@ void convert_hash_to_results(hash_t * restrict hash, Results * restrict out) {
   out->numLongCities = 0;
 
   for (int i = 0; i < hash->num_cities; i++) {
-    PackedCity city = { .reg = _mm256_load_si256((__m256i *)(hash->packed_cities + i * SHORT_CITY_LENGTH))};
-    int offset = hash->packed_offsets[i];
-    HashRow *rows = (HashRow *)(hash->hashed_storage + offset * (int)(HASH_ENTRY_SIZE / SHORT_CITY_LENGTH));
+    PackedCity city = { .reg = _mm256_load_si256((__m256i *)(hash->p.packedCities + i * SHORT_CITY_LENGTH))};
+    int offset = hash->p.packedOffsets[i];
+    HashRow *rows = (HashRow *)(hash->p.hashedStorage + offset * (int)(HASH_ENTRY_SIZE / SHORT_CITY_LENGTH));
 
     long sum  = EXTRACT_SUM(rows[0].packedSumCount);
     int count = EXTRACT_COUNT(rows[0].packedSumCount);
@@ -552,7 +556,7 @@ void convert_hash_to_results(hash_t * restrict hash, Results * restrict out) {
 
     out->refs[i] = (ResultsRef) {offset};
     if (unlikely(city_is_long(city))) {
-      LongCity *longCity = (LongCity *)(hash->hashed_cities_long + city.longRef.index);
+      LongCity *longCity = (LongCity *)(hash->p.hashedCitiesLong + city.longRef.index);
       out->longCities[out->numLongCities] = *longCity;
 
       city.longRef.index = out->numLongCities;
@@ -570,21 +574,23 @@ void start_worker(worker_t *w, Results *out) {
   void *hashData = mmap(NULL, HASH_MEMORY_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS , -1, 0);
   madvise(hashData, HASH_MEMORY_SIZE, MADV_HUGEPAGE);
 
-  hash_t hash = {0};
-  hash.packed_cities = hashData;
-  hashData += PACKED_CITIES_SIZE;
+  char * packedCities = hashData;
+  hashData += packedCities_SIZE;
 
-  hash.packed_offsets = hashData;
-  hashData += PACKED_OFFSETS_SIZE;
+  int * packedOffsets = hashData;
+  hashData += packedOffsets_SIZE;
 
-  hash.hashed_cities = hashData;
-  hashData += HASHED_CITIES_SIZE;
+  char * hashedCities = hashData;
+  hashData += hashedCities_SIZE;
 
-  hash.hashed_storage = hashData;
+  char * hashedStorage = hashData;
   hashData += HASHED_DATA_SIZE;
 
-  hash.hashed_cities_long = hashData;
-  hashData += HASHED_CITIES_LONG_SIZE;
+  char * hashedCitiesLong = hashData;
+  hashData += hashedCitiesLong_SIZE;
+
+
+  hash_t hash = {{packedCities, packedOffsets, hashedCities, hashedStorage, hashedCitiesLong}, 0 ,0};
 
   void * const data = mmap(NULL, MMAP_DATA_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 
@@ -637,7 +643,7 @@ void start_worker(worker_t *w, Results *out) {
 }
 
 void process_chunk(const char * const restrict base, const unsigned int * offsets, hash_t * restrict hash) {
-  char * const values_map = hash->hashed_storage;
+  char * const values_map = hash->p.hashedStorage;
 
   alignas(64) long nums[STRIDE];
   alignas(32) unsigned int starts[STRIDE];
@@ -976,24 +982,24 @@ __attribute__((always_inline)) inline int hash_city(__m256i str) {
 __attribute__((always_inline)) inline long insert_city(hash_t * restrict h, long hash, const __m256i maskedCity) {
 
   while (1) {
-    __m256i stored = _mm256_load_si256((__m256i *)(h->hashed_cities + hash));
+    __m256i stored = _mm256_load_si256((__m256i *)(h->p.hashedCities + hash));
     __m256i xor = _mm256_xor_si256(maskedCity, stored);
     if (likely(_mm256_testz_si256(xor, xor))) {
       return hash;
 
     }
     if (_mm256_testz_si256(stored, stored)) {
-      _mm256_store_si256((__m256i *)(h->packed_cities + h->num_cities * SHORT_CITY_LENGTH), maskedCity);
-      _mm256_store_si256((__m256i *)(h->hashed_cities + hash), maskedCity);
-      h->packed_offsets[h->num_cities] = hash;
+      _mm256_store_si256((__m256i *)(h->p.packedCities + h->num_cities * SHORT_CITY_LENGTH), maskedCity);
+      _mm256_store_si256((__m256i *)(h->p.hashedCities + hash), maskedCity);
+      h->p.packedOffsets[h->num_cities] = hash;
       h->num_cities += 1;
 
       __m256i initData = _mm256_set_epi32(MIN_TEMP, MAX_TEMP, SUM_SIGN_BIT >> 32, 0,
                                           MIN_TEMP, MAX_TEMP, SUM_SIGN_BIT >> 32, 0);
-      _mm256_store_si256((__m256i *)(h->hashed_storage + hash * 4), initData);
-      _mm256_store_si256((__m256i *)(h->hashed_storage + hash * 4) + 1, initData);
-      _mm256_store_si256((__m256i *)(h->hashed_storage + hash * 4) + 2, initData);
-      _mm256_store_si256((__m256i *)(h->hashed_storage + hash * 4) + 3, initData);
+      _mm256_store_si256((__m256i *)(h->p.hashedStorage + hash * 4), initData);
+      _mm256_store_si256((__m256i *)(h->p.hashedStorage + hash * 4) + 1, initData);
+      _mm256_store_si256((__m256i *)(h->p.hashedStorage + hash * 4) + 2, initData);
+      _mm256_store_si256((__m256i *)(h->p.hashedStorage + hash * 4) + 3, initData);
       return hash;
     }
     hash += SHORT_CITY_LENGTH;
@@ -1002,8 +1008,8 @@ __attribute__((always_inline)) inline long insert_city(hash_t * restrict h, long
 
 int insert_city_long1(hash_t * restrict hash, int hash_value, __m256i seg0, __m256i seg1) {
   while (1) {
-    __m256i stored0 = _mm256_loadu_si256((__m256i *)(hash->hashed_cities_long + hash_value));
-    __m256i stored1 = _mm256_loadu_si256((__m256i *)(hash->hashed_cities_long + hash_value) + 1);
+    __m256i stored0 = _mm256_loadu_si256((__m256i *)(hash->p.hashedCitiesLong + hash_value));
+    __m256i stored1 = _mm256_loadu_si256((__m256i *)(hash->p.hashedCitiesLong + hash_value) + 1);
     __m256i xor0 = _mm256_xor_si256(stored0, seg0);
     __m256i xor1 = _mm256_xor_si256(stored1, seg1);
 
@@ -1012,8 +1018,8 @@ int insert_city_long1(hash_t * restrict hash, int hash_value, __m256i seg0, __m2
     }
 
     if (_mm256_testz_si256(stored0, stored0)) {
-      _mm256_store_si256((__m256i *)(hash->hashed_cities_long + hash_value), seg0);
-      _mm256_store_si256((__m256i *)(hash->hashed_cities_long + hash_value) + 1, seg1);
+      _mm256_store_si256((__m256i *)(hash->p.hashedCitiesLong + hash_value), seg0);
+      _mm256_store_si256((__m256i *)(hash->p.hashedCitiesLong + hash_value) + 1, seg1);
       hash->num_cities_long++;
       return hash_value;
     }
@@ -1023,9 +1029,9 @@ int insert_city_long1(hash_t * restrict hash, int hash_value, __m256i seg0, __m2
 
 int insert_city_long2(hash_t * restrict hash, int hash_value, __m256i seg0, __m256i seg1, __m256i seg2) {
   while (1) {
-    __m256i stored0 = _mm256_loadu_si256((__m256i *)(hash->hashed_cities_long + hash_value));
-    __m256i stored1 = _mm256_loadu_si256((__m256i *)(hash->hashed_cities_long + hash_value) + 1);
-    __m256i stored2 = _mm256_loadu_si256((__m256i *)(hash->hashed_cities_long + hash_value) + 2);
+    __m256i stored0 = _mm256_loadu_si256((__m256i *)(hash->p.hashedCitiesLong + hash_value));
+    __m256i stored1 = _mm256_loadu_si256((__m256i *)(hash->p.hashedCitiesLong + hash_value) + 1);
+    __m256i stored2 = _mm256_loadu_si256((__m256i *)(hash->p.hashedCitiesLong + hash_value) + 2);
     __m256i xor0 = _mm256_xor_si256(stored0, seg0);
     __m256i xor1 = _mm256_xor_si256(stored1, seg1);
     __m256i xor2 = _mm256_xor_si256(stored2, seg2);
@@ -1035,9 +1041,9 @@ int insert_city_long2(hash_t * restrict hash, int hash_value, __m256i seg0, __m2
     }
 
     if (_mm256_testz_si256(stored0, stored0)) {
-      _mm256_store_si256((__m256i *)(hash->hashed_cities_long + hash_value), seg0);
-      _mm256_store_si256((__m256i *)(hash->hashed_cities_long + hash_value) + 1, seg1);
-      _mm256_store_si256((__m256i *)(hash->hashed_cities_long + hash_value) + 2, seg2);
+      _mm256_store_si256((__m256i *)(hash->p.hashedCitiesLong + hash_value), seg0);
+      _mm256_store_si256((__m256i *)(hash->p.hashedCitiesLong + hash_value) + 1, seg1);
+      _mm256_store_si256((__m256i *)(hash->p.hashedCitiesLong + hash_value) + 2, seg2);
       hash->num_cities_long++;
       return hash_value;
     }
@@ -1047,10 +1053,10 @@ int insert_city_long2(hash_t * restrict hash, int hash_value, __m256i seg0, __m2
 
 int insert_city_long3(hash_t * restrict hash, int hash_value, __m256i seg0, __m256i seg1, __m256i seg2, __m256i seg3) {
   while (1) {
-    __m256i stored0 = _mm256_loadu_si256((__m256i *)(hash->hashed_cities_long + hash_value));
-    __m256i stored1 = _mm256_loadu_si256((__m256i *)(hash->hashed_cities_long + hash_value) + 1);
-    __m256i stored2 = _mm256_loadu_si256((__m256i *)(hash->hashed_cities_long + hash_value) + 2);
-    __m256i stored3 = _mm256_loadu_si256((__m256i *)(hash->hashed_cities_long + hash_value) + 3);
+    __m256i stored0 = _mm256_loadu_si256((__m256i *)(hash->p.hashedCitiesLong + hash_value));
+    __m256i stored1 = _mm256_loadu_si256((__m256i *)(hash->p.hashedCitiesLong + hash_value) + 1);
+    __m256i stored2 = _mm256_loadu_si256((__m256i *)(hash->p.hashedCitiesLong + hash_value) + 2);
+    __m256i stored3 = _mm256_loadu_si256((__m256i *)(hash->p.hashedCitiesLong + hash_value) + 3);
     __m256i xor0 = _mm256_xor_si256(stored0, seg0);
     __m256i xor1 = _mm256_xor_si256(stored1, seg1);
     __m256i xor2 = _mm256_xor_si256(stored2, seg2);
@@ -1061,10 +1067,10 @@ int insert_city_long3(hash_t * restrict hash, int hash_value, __m256i seg0, __m2
     }
 
     if (_mm256_testz_si256(stored0, stored0)) {
-      _mm256_store_si256((__m256i *)(hash->hashed_cities_long + hash_value), seg0);
-      _mm256_store_si256((__m256i *)(hash->hashed_cities_long + hash_value) + 1, seg1);
-      _mm256_store_si256((__m256i *)(hash->hashed_cities_long + hash_value) + 2, seg2);
-      _mm256_store_si256((__m256i *)(hash->hashed_cities_long + hash_value) + 3, seg3);
+      _mm256_store_si256((__m256i *)(hash->p.hashedCitiesLong + hash_value), seg0);
+      _mm256_store_si256((__m256i *)(hash->p.hashedCitiesLong + hash_value) + 1, seg1);
+      _mm256_store_si256((__m256i *)(hash->p.hashedCitiesLong + hash_value) + 2, seg2);
+      _mm256_store_si256((__m256i *)(hash->p.hashedCitiesLong + hash_value) + 3, seg3);
       hash->num_cities_long++;
       return hash_value;
     }
