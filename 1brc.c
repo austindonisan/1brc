@@ -48,9 +48,10 @@
 #define SHORT_CITY_LENGTH 32
 #define LONG_CITY_LENGTH 128
 
-#define HASH_SHIFT 17        // max(desired, log2(MAX_CITIES))
-#define HASH_LONG_SHIFT 15
+#define HASH_SHIFT 17      // 16 is 1% faster for non-10k, 17 is 10% faster for 10k
+#define HASH_LONG_SHIFT 14 // 14 is requried to fit 10k entries
 
+// wrapping and fitting nicely in pages is better than extra buffer at the end
 #define HASH_ENTRIES      (1 << HASH_SHIFT)
 #define HASH_LONG_ENTRIES (1 << HASH_LONG_SHIFT)
 
@@ -63,7 +64,6 @@ typedef struct {
 } hash_entry_t;
 
 typedef struct {
-  char * const restrict packedCities;
   int * const restrict packedOffsets;
   char * const restrict hashedCities;
   char * const restrict hashedStorage;
@@ -213,28 +213,23 @@ void print256(__m256i var);
 #define HASH_CITY_OFFSET 5        // log2(SHORT_CITY_LENGTH)
 #define HASH_CITY_LONG_OFFSET 7   // log2(LONG_CITY_LENGTH)
 
-#define HASH_SHORT_MASK (((1 << (HASH_SHIFT      - 1)) - 1) << MIN(HASH_DATA_OFFSET, HASH_CITY_OFFSET))
-#define HASH_LONG_MASK  (((1 << (HASH_LONG_SHIFT - 1)) - 1) << HASH_CITY_LONG_OFFSET)
+#define HASH_SHORT_MASK (((1 << HASH_SHIFT     ) - 1) << MIN(HASH_DATA_OFFSET, HASH_CITY_OFFSET))
+#define HASH_LONG_MASK  (((1 << HASH_LONG_SHIFT) - 1) << HASH_CITY_LONG_OFFSET)
 
 #define HASH_DATA_SHIFT (HASH_DATA_OFFSET - MIN(HASH_DATA_OFFSET, HASH_CITY_OFFSET))
 #define HASH_CITY_SHIFT (HASH_CITY_OFFSET - MIN(HASH_DATA_OFFSET, HASH_CITY_OFFSET))
 
-#define HASH_LENGTH      (1 << HASH_SHIFT)
-#define HASH_LONG_LENGTH (1 << HASH_LONG_SHIFT)
+#define HASHED_CITIES_SIZE      HUGE_PAGE_CEIL(SHORT_CITY_LENGTH * HASH_ENTRIES)
+#define HASHED_DATA_SIZE        HUGE_PAGE_CEIL(HASH_ENTRY_SIZE   * HASH_ENTRIES)
+#define HASHED_CITIES_LONG_SIZE HUGE_PAGE_CEIL(LONG_CITY_LENGTH  * HASH_LONG_ENTRIES)
+#define PACKED_OFFSETS_SIZE     LINE_CEIL((int)sizeof(int) * MAX_CITIES)
 
-#define HASH_SIZE               LINE_CEIL(sizeof(hash_t))
-#define PACKED_CITIES_SIZE      LINE_CEIL(SHORT_CITY_LENGTH * MAX_CITIES)
-#define PACKED_OFFSETS_SIZE     LINE_CEIL(32                * MAX_CITIES)
-#define HASHED_CITIES_SIZE      LINE_CEIL(SHORT_CITY_LENGTH * HASH_LENGTH)
-#define HASHED_DATA_SIZE        LINE_CEIL(HASH_ENTRY_SIZE   * HASH_LENGTH)
-#define HASHED_CITIES_LONG_SIZE LINE_CEIL(LONG_CITY_LENGTH  * HASH_LONG_LENGTH)
-
-#define HASH_MEMORY_SIZE HUGE_PAGE_CEIL(HASH_SIZE + PACKED_CITIES_SIZE + PACKED_OFFSETS_SIZE + HASHED_CITIES_SIZE + HASHED_DATA_SIZE + HASHED_CITIES_LONG_SIZE)
+#define HASH_MEMORY_SIZE HUGE_PAGE_CEIL(HASHED_CITIES_SIZE  + HASHED_DATA_SIZE + HASHED_CITIES_LONG_SIZE + PACKED_OFFSETS_SIZE)
 
 #define RESULTS_SIZE               LINE_CEIL(sizeof(Results))
 #define RESULTS_REFS_SIZE          LINE_CEIL(sizeof(ResultsRef)  * MAX_CITIES)
 #define RESULTS_ROWS_SIZE          LINE_CEIL(sizeof(ResultsRow)  * HASH_ENTRIES)
-#define RESULTS_LONG_CITIES_SIZE   LINE_CEIL(sizeof(LongCity)    * HASH_LONG_ENTRIES)
+#define RESULTS_LONG_CITIES_SIZE   LINE_CEIL(sizeof(LongCity)    * (MAX_CITIES - 1))
 
 #define RESULTS_MEMORY_SIZE        HUGE_PAGE_CEIL(RESULTS_SIZE + \
                                                   RESULTS_REFS_SIZE + \
@@ -426,6 +421,7 @@ void merge(Results * restrict dst, Results * restrict src) {
         break;
       }
       hashValue += SHORT_CITY_LENGTH;
+      hashValue &= HASH_SHORT_MASK;
     }
   }
 }
@@ -542,8 +538,8 @@ void convert_hash_to_results(hash_t * restrict hash, Results * restrict out) {
   out->numLongCities = 0;
 
   for (int i = 0; i < hash->counts.numCities; i++) {
-    PackedCity city = { .reg = _mm256_load_si256((__m256i *)(hash->p.packedCities + i * SHORT_CITY_LENGTH))};
     int offset = hash->p.packedOffsets[i];
+    PackedCity city = { .reg = _mm256_load_si256((__m256i *)(hash->p.hashedCities + offset))};
     HashRow *rows = (HashRow *)(hash->p.hashedStorage + offset * (int)(HASH_ENTRY_SIZE / SHORT_CITY_LENGTH));
 
     long sum  = EXTRACT_SUM(rows[0].packedSumCount);
@@ -574,15 +570,9 @@ void convert_hash_to_results(hash_t * restrict hash, Results * restrict out) {
 
 void start_worker(worker_t *w, Results *out) {
   TIMER_INIT();
-
-  void *hashData = mmap(NULL, HASH_MEMORY_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS , -1, 0);
+  void *hashData = mmap(NULL, HASH_MEMORY_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   madvise(hashData, HASH_MEMORY_SIZE, MADV_HUGEPAGE);
-
-  char * packedCities = hashData;
-  hashData += PACKED_CITIES_SIZE;
-
-  int * packedOffsets = hashData;
-  hashData += PACKED_OFFSETS_SIZE;
+  madvise(hashData, HASHED_CITIES_SIZE + HASHED_DATA_SIZE, MADV_POPULATE_WRITE);
 
   char * hashedCities = hashData;
   hashData += HASHED_CITIES_SIZE;
@@ -593,8 +583,10 @@ void start_worker(worker_t *w, Results *out) {
   char * hashedCitiesLong = hashData;
   hashData += HASHED_CITIES_LONG_SIZE;
 
+  int * packedOffsets = hashData;
+  hashData += PACKED_OFFSETS_SIZE;
 
-  hash_t hash = {{packedCities, packedOffsets, hashedCities, hashedStorage, hashedCitiesLong}, {0 ,0}};
+  hash_t hash = {{packedOffsets, hashedCities, hashedStorage, hashedCitiesLong}, {0 ,0}};
 
   void * const data = mmap(NULL, MMAP_DATA_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 
@@ -993,7 +985,6 @@ __attribute__((always_inline)) inline long insert_city(hash_t * restrict h, long
 
     }
     if (_mm256_testz_si256(stored, stored)) {
-      _mm256_store_si256((__m256i *)(h->p.packedCities + h->counts.numCities * SHORT_CITY_LENGTH), maskedCity);
       _mm256_store_si256((__m256i *)(h->p.hashedCities + hash), maskedCity);
       h->p.packedOffsets[h->counts.numCities] = hash;
       h->counts.numCities += 1;
@@ -1007,6 +998,7 @@ __attribute__((always_inline)) inline long insert_city(hash_t * restrict h, long
       return hash;
     }
     hash += SHORT_CITY_LENGTH;
+    hash &= HASH_SHORT_MASK;
   }
 }
 
@@ -1028,6 +1020,7 @@ int insert_city_long1(hash_t * restrict hash, int hash_value, __m256i seg0, __m2
       return hash_value;
     }
     hash_value += LONG_CITY_LENGTH;
+    hash_value &= HASH_LONG_MASK;
   }
 }
 
@@ -1052,6 +1045,7 @@ int insert_city_long2(hash_t * restrict hash, int hash_value, __m256i seg0, __m2
       return hash_value;
     }
     hash_value += LONG_CITY_LENGTH;
+    hash_value &= HASH_LONG_MASK;
   }
 }
 
@@ -1079,6 +1073,7 @@ int insert_city_long3(hash_t * restrict hash, int hash_value, __m256i seg0, __m2
       return hash_value;
     }
     hash_value += LONG_CITY_LENGTH;
+    hash_value &= HASH_LONG_MASK;
   }
 }
 
