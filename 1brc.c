@@ -223,13 +223,13 @@ void print256(__m256i var);
 #define HASH_LONG_LENGTH (1 << HASH_LONG_SHIFT)
 
 #define HASH_SIZE               LINE_CEIL(sizeof(hash_t))
-#define packedCities_SIZE      LINE_CEIL(SHORT_CITY_LENGTH * MAX_CITIES)
-#define packedOffsets_SIZE     LINE_CEIL(32                * MAX_CITIES)
-#define hashedCities_SIZE      LINE_CEIL(SHORT_CITY_LENGTH * HASH_LENGTH)
+#define PACKED_CITIES_SIZE      LINE_CEIL(SHORT_CITY_LENGTH * MAX_CITIES)
+#define PACKED_OFFSETS_SIZE     LINE_CEIL(32                * MAX_CITIES)
+#define HASHED_CITIES_SIZE      LINE_CEIL(SHORT_CITY_LENGTH * HASH_LENGTH)
 #define HASHED_DATA_SIZE        LINE_CEIL(HASH_ENTRY_SIZE   * HASH_LENGTH)
-#define hashedCitiesLong_SIZE LINE_CEIL(LONG_CITY_LENGTH  * HASH_LONG_LENGTH)
+#define HASHED_CITIES_LONG_SIZE LINE_CEIL(LONG_CITY_LENGTH  * HASH_LONG_LENGTH)
 
-#define HASH_MEMORY_SIZE HUGE_PAGE_CEIL(HASH_SIZE + packedCities_SIZE + packedOffsets_SIZE + hashedCities_SIZE + HASHED_DATA_SIZE + hashedCitiesLong_SIZE)
+#define HASH_MEMORY_SIZE HUGE_PAGE_CEIL(HASH_SIZE + PACKED_CITIES_SIZE + PACKED_OFFSETS_SIZE + HASHED_CITIES_SIZE + HASHED_DATA_SIZE + HASHED_CITIES_LONG_SIZE)
 
 #define RESULTS_SIZE               LINE_CEIL(sizeof(Results))
 #define RESULTS_REFS_SIZE          LINE_CEIL(sizeof(ResultsRef)  * MAX_CITIES)
@@ -579,19 +579,19 @@ void start_worker(worker_t *w, Results *out) {
   madvise(hashData, HASH_MEMORY_SIZE, MADV_HUGEPAGE);
 
   char * packedCities = hashData;
-  hashData += packedCities_SIZE;
+  hashData += PACKED_CITIES_SIZE;
 
   int * packedOffsets = hashData;
-  hashData += packedOffsets_SIZE;
+  hashData += PACKED_OFFSETS_SIZE;
 
   char * hashedCities = hashData;
-  hashData += hashedCities_SIZE;
+  hashData += HASHED_CITIES_SIZE;
 
   char * hashedStorage = hashData;
   hashData += HASHED_DATA_SIZE;
 
   char * hashedCitiesLong = hashData;
-  hashData += hashedCitiesLong_SIZE;
+  hashData += HASHED_CITIES_LONG_SIZE;
 
 
   hash_t hash = {{packedCities, packedOffsets, hashedCities, hashedStorage, hashedCitiesLong}, {0 ,0}};
