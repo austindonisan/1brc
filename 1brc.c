@@ -41,7 +41,7 @@
 #define DEBUG 0
 
 
-#define MAX_CITIES 10001 // + 1 for dummy city
+#define MAX_CITIES 10000
 #define MAX_TEMP 999
 #define MIN_TEMP -999
 
@@ -162,7 +162,6 @@ inline __m256i city_from_long_hash(int hashValue);
 inline int long_hash_from_city(__m256i city);
 inline void setup_results(Results *r);
 inline bool city_is_long(PackedCity city);
-inline bool city_is_dummy(PackedCity city);
 void print256(__m256i var);
 
 #if DEBUG
@@ -222,14 +221,14 @@ void print256(__m256i var);
 #define HASHED_CITIES_SIZE      HUGE_PAGE_CEIL(SHORT_CITY_LENGTH * HASH_ENTRIES)
 #define HASHED_DATA_SIZE        HUGE_PAGE_CEIL(HASH_ENTRY_SIZE   * HASH_ENTRIES)
 #define HASHED_CITIES_LONG_SIZE HUGE_PAGE_CEIL(LONG_CITY_LENGTH  * HASH_LONG_ENTRIES)
-#define PACKED_OFFSETS_SIZE     LINE_CEIL((int)sizeof(int) * MAX_CITIES)
+#define PACKED_OFFSETS_SIZE     PAGE_CEIL((int)sizeof(int) * MAX_CITIES)
 
-#define HASH_MEMORY_SIZE HUGE_PAGE_CEIL(HASHED_CITIES_SIZE  + HASHED_DATA_SIZE + HASHED_CITIES_LONG_SIZE + PACKED_OFFSETS_SIZE)
+#define HASH_MEMORY_SIZE (PACKED_OFFSETS_SIZE + HASHED_CITIES_SIZE  + HASHED_DATA_SIZE + HASHED_CITIES_LONG_SIZE)
 
 #define RESULTS_SIZE               LINE_CEIL(sizeof(Results))
 #define RESULTS_REFS_SIZE          LINE_CEIL(sizeof(ResultsRef)  * MAX_CITIES)
 #define RESULTS_ROWS_SIZE          LINE_CEIL(sizeof(ResultsRow)  * HASH_ENTRIES)
-#define RESULTS_LONG_CITIES_SIZE   LINE_CEIL(sizeof(LongCity)    * (MAX_CITIES - 1))
+#define RESULTS_LONG_CITIES_SIZE   LINE_CEIL(sizeof(LongCity)    * MAX_CITIES)
 
 #define RESULTS_MEMORY_SIZE        HUGE_PAGE_CEIL(RESULTS_SIZE + \
                                                   RESULTS_REFS_SIZE + \
@@ -247,7 +246,6 @@ void print256(__m256i var);
 #define SUM_MASK ((1L << COUNT_BITS_START) - 1)
 #define EXTRACT_SUM(v) ((v & SUM_MASK) - SUM_SIGN_BIT)
 
-#define DUMMY_CITY_SENTINEL 0x00444100
 #define LONG_CITY_SENTINEL 0xFACADE00
 
 alignas(32) const char * const masked_dummy = (char []){
@@ -570,10 +568,21 @@ void convert_hash_to_results(hash_t * restrict hash, Results * restrict out) {
 
 void start_worker(worker_t *w, Results *out) {
   TIMER_INIT();
-  void *hashData = mmap(NULL, HASH_MEMORY_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-  madvise(hashData, HASH_MEMORY_SIZE, MADV_HUGEPAGE);
-  madvise(hashData, HASHED_CITIES_SIZE + HASHED_DATA_SIZE, MADV_POPULATE_WRITE);
+
+  // 4k pages at the front for the offsets, 2MB pagesfor the everything else
+  // pre-fault everything except the long cities
+  void *hashData = mmap(NULL, HASH_MEMORY_SIZE + HUGE_PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+
+  hashData += PACKED_OFFSETS_SIZE;
+  hashData = HUGE_PAGE_CEIL_P(hashData);
+  hashData -= PACKED_OFFSETS_SIZE;
+
+  madvise(hashData + PACKED_OFFSETS_SIZE, HASHED_CITIES_SIZE + HASHED_DATA_SIZE + HASHED_CITIES_LONG_SIZE, MADV_HUGEPAGE);
+  madvise(hashData, HASH_MEMORY_SIZE, MADV_POPULATE_WRITE);
   TIMER_MS_NUM("mmap", w->worker_id);
+
+  int * packedOffsets = hashData;
+  hashData += PACKED_OFFSETS_SIZE;
 
   char * hashedCities = hashData;
   hashData += HASHED_CITIES_SIZE;
@@ -583,9 +592,6 @@ void start_worker(worker_t *w, Results *out) {
 
   char * hashedCitiesLong = hashData;
   hashData += HASHED_CITIES_LONG_SIZE;
-
-  int * packedOffsets = hashData;
-  hashData += PACKED_OFFSETS_SIZE;
 
   hash_t hash = {{packedOffsets, hashedCities, hashedStorage, hashedCitiesLong}, {0 ,0}};
 
@@ -652,7 +658,8 @@ __attribute__((aligned(4096))) void process_chunk(const char * const restrict ba
 
   _mm256_store_si256((__m256i *)starts, starts_v);
 
-  insert_city(&hash, hash_city(_mm256_loadu_si256((__m256i *)masked_dummy)), _mm256_loadu_si256((__m256i *)masked_dummy));
+  __m256i dummy = _mm256_load_si256((__m256i *)masked_dummy);
+  _mm256_store_si256((__m256i*)(hash.p.hashedCities + hash_city(dummy)), dummy);
 
   while(1) {
     if (unlikely(checkFinished)) {
@@ -1102,8 +1109,7 @@ void print_results(Results *results) {
   int pos = 0;
   buffer[pos++] = '{';
 
-  // result 0 is dummy
-  for (int i = 1; i < results->numCities; i++) {
+  for (int i = 0; i < results->numCities; i++) {
     ResultsRef ref = results->refs[i];
     ResultsRow row = results->rows[ref.offset / SHORT_CITY_LENGTH];
 
@@ -1146,18 +1152,13 @@ unsigned int find_next_row(const void *data, unsigned int offset) {
 }
 
 void debug_results(Results *results) {
-  const char * dummyName = "__DUMMY__";
-
   fprintf(stderr, "\n");
   for (int i = 0; i < MIN(10, results->numCities); i++) {
     ResultsRef ref = results->refs[i];
     ResultsRow row = results->rows[ref.offset / SHORT_CITY_LENGTH];
 
     const char *bytes;
-    if (city_is_dummy(row.city)) {
-      bytes = dummyName;
-    }
-    else if (city_is_long(row.city)) {
+    if (city_is_long(row.city)) {
       bytes = results->longCities[row.city.longRef.index].bytes;
     }
     else {
@@ -1192,9 +1193,6 @@ __attribute__((always_inline)) inline int hash_to_offset(int hash, int streamIdx
 
 __attribute__((always_inline)) inline bool city_is_long(PackedCity city) {
   return city.longRef.sentinel == LONG_CITY_SENTINEL;
-}
-__attribute__((always_inline)) inline bool city_is_dummy(PackedCity city) {
-  return city.longRef.sentinel == DUMMY_CITY_SENTINEL;
 }
 void print256(__m256i var) {
     char val[32];
