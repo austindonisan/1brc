@@ -233,7 +233,9 @@ void print256(__m256i var);
 #define RESULTS_MEMORY_SIZE        PAGE_CEIL(RESULTS_SIZE + RESULTS_REFS_SIZE + RESULTS_ROWS_SIZE + RESULTS_LONG_CITIES_SIZE)
 
 #define MMAP_DATA_SIZE (1L << 32)
-#define MAX_CHUNK_SIZE (MMAP_DATA_SIZE - 2*PAGE_SIZE)
+#define DUMMY_SIZE     PAGE_SIZE
+#define TRAILING_SPACE PAGE_SIZE
+#define MAX_CHUNK_SIZE (MMAP_DATA_SIZE - DUMMY_SIZE - TRAILING_SPACE)
 
 #define SUM_BITS 35 // 1 + ceil(log2(1B * 999 / 8 / 8)
 #define SUM_SIGN_BIT (1L << (SUM_BITS))
@@ -596,8 +598,8 @@ void start_worker(worker_t *w, Results *out) {
 
   // \0AD;0.0\n
   __m256i dummyData = _mm256_set1_epi64x(0x0A302E303B444100);
-  for (int i = 0; i < PAGE_SIZE; i += 32) {
-    _mm256_store_si256(data + i, dummyData);
+  for (int i = 0; i < DUMMY_SIZE; i += 32) {
+    _mm256_store_si256(data + i + 32, dummyData);
   }
 
   for (long start = w->start; start < w->end; start += MAX_CHUNK_SIZE) {
@@ -609,7 +611,7 @@ void start_worker(worker_t *w, Results *out) {
     unsigned int chunk_size = (unsigned int)(end - start);
     unsigned int mapped_file_length = last ? PAGE_CEIL(chunk_size) : chunk_size + PAGE_SIZE;
 
-    mmap(data + PAGE_SIZE, mapped_file_length, PROT_READ, MAP_PRIVATE | MAP_FIXED , w->fd, start);
+    mmap(data + DUMMY_SIZE, mapped_file_length, PROT_READ, MAP_PRIVATE | MAP_FIXED , w->fd, start);
 
     if (DEBUG && w->warmup) {
       long dummy = 0;
@@ -625,12 +627,12 @@ void start_worker(worker_t *w, Results *out) {
 
     unsigned int offsets[STRIDE + 1];
     if (first) {
-      offsets[0] = PAGE_SIZE;
+      offsets[0] = DUMMY_SIZE;
     }
     for (int i = first ? 1 : 0; i < STRIDE; i++) {
-      offsets[i] = find_next_row(data, chunk_size / STRIDE * i + PAGE_SIZE);
+      offsets[i] = find_next_row(data, chunk_size / STRIDE * i + DUMMY_SIZE);
     }
-    offsets[STRIDE] = last ? chunk_size + PAGE_SIZE : find_next_row(data, chunk_size + PAGE_SIZE);
+    offsets[STRIDE] = last ? chunk_size + DUMMY_SIZE : find_next_row(data, chunk_size + DUMMY_SIZE);
 
     process_chunk(data, offsets, &hash);
     TIMER_MS_NUM("chunk", w->worker_id);
@@ -669,7 +671,7 @@ __attribute__((aligned(4096))) void process_chunk(const void * const restrict ba
       }
 
       starts_v = _mm256_andnot_si256(finished_v, starts_v);
-      ends_v = (__m256i)_mm256_blendv_ps((__m256)ends_v, (__m256)_mm256_set1_epi32(PAGE_SIZE), (__m256)finished_v);
+      ends_v = (__m256i)_mm256_blendv_ps((__m256)ends_v, (__m256)_mm256_set1_epi32(DUMMY_SIZE), (__m256)finished_v);
 
       // wtf, why is this like 10 slower than the masked store
       //_mm256_store_si256((__m256i *)starts, starts_v);
