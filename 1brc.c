@@ -573,6 +573,7 @@ void start_worker(worker_t *w, Results *out) {
   void *hashData = mmap(NULL, HASH_MEMORY_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   madvise(hashData, HASH_MEMORY_SIZE, MADV_HUGEPAGE);
   madvise(hashData, HASHED_CITIES_SIZE + HASHED_DATA_SIZE, MADV_POPULATE_WRITE);
+  TIMER_MS_NUM("mmap", w->worker_id);
 
   char * hashedCities = hashData;
   hashData += HASHED_CITIES_SIZE;
@@ -608,14 +609,13 @@ void start_worker(worker_t *w, Results *out) {
     mmap(data + PAGE_SIZE, mapped_file_length, PROT_READ, MAP_PRIVATE | MAP_FIXED , w->fd, start);
 
     if (DEBUG && w->warmup) {
-      TIMER_RESET();
       long dummy = 0;
       for (long i = 0; i < mapped_file_length; i += PAGE_SIZE) {
         dummy += *(long *)(data + i);
       }
       volatile long dummy2 = dummy;
       (void)dummy2;
-      TIMER_MS("warmup");
+      TIMER_MS_NUM("warmup", w->worker_id);
     }
 
 
@@ -628,14 +628,13 @@ void start_worker(worker_t *w, Results *out) {
     }
     offsets[STRIDE] = last ? chunk_size + PAGE_SIZE : find_next_row(data, chunk_size + PAGE_SIZE);
 
-    TIMER_RESET();
     process_chunk(data, offsets, &hash);
     TIMER_MS_NUM("chunk", w->worker_id);
   }
 
   TIMER_RESET();
   convert_hash_to_results(&hash, out);
-  TIMER_MS("convert");
+  TIMER_MS_NUM("convert", w->worker_id);
 }
 
 __attribute__((aligned(4096))) void process_chunk(const char * const restrict base, const unsigned int * offsets, hash_t * restrict hashOut) {
