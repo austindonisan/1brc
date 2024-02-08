@@ -622,6 +622,7 @@ void start_worker(worker_t *w, Results *out) {
       volatile long dummy2 = dummy;
       (void)dummy2;
       TIMER_MS_NUM("warmup", w->worker_id);
+      TIMER_RESET();
     }
 
 
