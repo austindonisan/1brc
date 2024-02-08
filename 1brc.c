@@ -599,7 +599,7 @@ void start_worker(worker_t *w, Results *out) {
   // \0AD;0.0\n
   __m256i dummyData = _mm256_set1_epi64x(0x0A302E303B444100);
   for (int i = 0; i < DUMMY_SIZE; i += 32) {
-    _mm256_store_si256(data + i + 32, dummyData);
+    _mm256_store_si256(data + i, dummyData);
   }
 
   for (long start = w->start; start < w->end; start += MAX_CHUNK_SIZE) {
