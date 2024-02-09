@@ -50,6 +50,7 @@
 
 #define HASH_SHIFT 17      // 16 is 1% faster for non-10k, 17 is 10% faster for 10k
 #define HASH_LONG_SHIFT 14 // 14 is requried to fit 10k entries
+#define HASH_RESULT_SHIFT 14
 
 // wrapping and fitting nicely in pages is better than extra buffer at the end
 #define HASH_ENTRIES      (1 << HASH_SHIFT)
@@ -212,8 +213,9 @@ void print256(__m256i var);
 #define HASH_CITY_OFFSET 5        // log2(SHORT_CITY_LENGTH)
 #define HASH_CITY_LONG_OFFSET 7   // log2(LONG_CITY_LENGTH)
 
-#define HASH_SHORT_MASK (((1 << HASH_SHIFT     ) - 1) << MIN(HASH_DATA_OFFSET, HASH_CITY_OFFSET))
-#define HASH_LONG_MASK  (((1 << HASH_LONG_SHIFT) - 1) << HASH_CITY_LONG_OFFSET)
+#define HASH_SHORT_MASK  (((1 << HASH_SHIFT       ) - 1) << MIN(HASH_DATA_OFFSET, HASH_CITY_OFFSET))
+#define HASH_LONG_MASK   (((1 << HASH_LONG_SHIFT  ) - 1) << HASH_CITY_LONG_OFFSET)
+#define HASH_RESULT_MASK (((1 << HASH_RESULT_SHIFT) - 1) << HASH_CITY_OFFSET)
 
 #define HASH_DATA_SHIFT (HASH_DATA_OFFSET - MIN(HASH_DATA_OFFSET, HASH_CITY_OFFSET))
 #define HASH_CITY_SHIFT (HASH_CITY_OFFSET - MIN(HASH_DATA_OFFSET, HASH_CITY_OFFSET))
@@ -400,6 +402,7 @@ void merge(Results * restrict dst, Results * restrict src) {
       hashValue = hash_city(row.city.reg);
     }
 
+    hashValue = (hashValue >> (HASH_SHIFT - HASH_RESULT_SHIFT)) & HASH_RESULT_MASK;
     while (1) {
       ResultsRow *dstRow = dst->rows + (hashValue / SHORT_CITY_LENGTH);
       __m256i xor = _mm256_xor_si256(dstRow->city.reg, row.city.reg);
@@ -413,12 +416,13 @@ void merge(Results * restrict dst, Results * restrict src) {
 
       if (_mm256_testz_si256(dstRow->city.reg, dstRow->city.reg)) {
         dst->refs[dst->numCities] = (ResultsRef){hashValue};
-        dst->rows[hashValue /  SHORT_CITY_LENGTH] = row;
+        dst->rows[hashValue / SHORT_CITY_LENGTH] = row;
         dst->numCities++;
         break;
       }
+
       hashValue += SHORT_CITY_LENGTH;
-      hashValue &= HASH_SHORT_MASK;
+      hashValue &= HASH_RESULT_MASK;
     }
   }
 }
@@ -551,7 +555,6 @@ void convert_hash_to_results(hash_t * restrict hash, Results * restrict out) {
       max = MAX(max, rows[i].max);
     }
 
-    out->refs[i] = (ResultsRef) {offset};
     if (unlikely(city_is_long(city))) {
       LongCity *longCity = hash->p.hashedCitiesLong + city.longRef.index;
       out->longCities[out->numLongCities] = *longCity;
@@ -560,7 +563,19 @@ void convert_hash_to_results(hash_t * restrict hash, Results * restrict out) {
       out->numLongCities++;
     }
 
-    out->rows[offset /  SHORT_CITY_LENGTH] = (ResultsRow) {city, sum, count, min, max};
+    offset = (offset >> (HASH_SHIFT - HASH_RESULT_SHIFT)) & HASH_RESULT_MASK;
+    if (offset / SHORT_CITY_LENGTH * SHORT_CITY_LENGTH != offset) {
+      fprintf(stderr, "nooo: %d\n", offset);
+    }
+    while (1) {
+      if (_mm256_testz_si256(out->rows[offset / SHORT_CITY_LENGTH].city.reg, out->rows[offset / SHORT_CITY_LENGTH].city.reg)) {
+        out->rows[offset / SHORT_CITY_LENGTH] = (ResultsRow) {city, sum, count, min, max};
+        break;
+      }
+      offset += SHORT_CITY_LENGTH;
+      offset &= HASH_RESULT_MASK;
+    }
+    out->refs[i] = (ResultsRef) {offset};
   }
 }
 
