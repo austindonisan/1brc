@@ -836,7 +836,7 @@ __attribute__((aligned(4096))) void process_chunk(const void * const restrict ba
     // scale+offset hashs in the store/load to avoid register intermediates
     // long instead of int to advoid unecessary sign extends
     long hash0 = insert_city(&hash, _mm256_extract_epi32(city_hashes, 0), maskedCity0);
-    __m128i vals0 = _mm_load_si128(hash.p.hashedStorage + hash0*4 + 0*16);
+    __m128i vals0 = _mm_load_si128(hash.p.hashedStorage + 4*hash0 + 16*0);
 
     long hash4 = insert_city(&hash, _mm256_extract_epi32(city_hashes, 2), maskedCity4);
     __m128i vals4 = _mm_load_si128(hash.p.hashedStorage + 4*hash4 + 16*4);
