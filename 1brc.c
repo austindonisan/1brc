@@ -30,7 +30,7 @@
 /*
  * Print timing information and city summary to stderr.
  */
-#define DEBUG 1
+#define DEBUG 0
 
 #define HASH_SHIFT 17      // 17 is a happy compromise between non-10k/10k: 16 is 1% faster/10% slower; 18 is 1% slower/3% faster
 #define HASH_LONG_SHIFT 14 // 14 is requried to fit 10k entries and also fastest
