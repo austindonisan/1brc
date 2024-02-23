@@ -3,6 +3,8 @@
 #include <math.h>
 #include <poll.h>
 #include <sched.h>
+#include <stdalign.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>

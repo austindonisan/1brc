@@ -1,5 +1,5 @@
 #### Buiding
-`clang-17 1brc.c -std=c2x -march=native -mtune=native -Ofast -o 1brc`
+`clang-17 1brc.c -std=c17 -march=native -mtune=native -Ofast -o 1brc`
 
 AVX2 is required. GCC also works, but its binary is ~15% slower.
 
