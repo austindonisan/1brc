@@ -348,7 +348,7 @@ void prep_workers(worker_t *workers, int numWorkers, bool warmup, int fd, struct
 }
 
 
-inline bool long_city_equal(LongCity *a, LongCity *b) {
+__attribute__((always_inline)) inline bool long_city_equal(LongCity *a, LongCity *b) {
   __m256i xor0 = _mm256_xor_si256(a->regs[0], b->regs[0]);
   __m256i xor1 = _mm256_xor_si256(a->regs[1], b->regs[1]);
   __m256i xor2 = _mm256_xor_si256(a->regs[2], b->regs[2]);
