@@ -84,7 +84,7 @@ typedef struct {
   bool warmup;
   bool first;
   bool last;
-} worker_t;
+} Worker;
 
 
 typedef struct {
@@ -135,9 +135,9 @@ typedef struct {
   LongCity * restrict longCities;
 } Results;
 
-void prep_workers(worker_t *workers, int numWorkers, bool warmup, int fd, struct stat *fileStat);
-void process(int id, worker_t * workers, int numWorkers, int fd, Results *out);
-void start_worker(worker_t *w, Results *out);
+void prep_workers(Worker *workers, int numWorkers, bool warmup, int fd, struct stat *fileStat);
+void process(int id, Worker *workers, int numWorkers, int fd, Results *out);
+void start_worker(Worker *w, Results *out);
 void process_chunk(const void * const restrict base, const unsigned int * offsets, hash_t * restrict h);
 __m256i process_long(const void * const restrict start, hash_t * restrict h, int * restrict semicolonBytesOut);
 inline __m256i hash_cities(__m256i a, __m256i b, __m256i c, __m256i d, __m256i e, __m256i f, __m256i g, __m256i h);
@@ -283,13 +283,13 @@ int main(int argc, char** argv) {
     numWorkers = (int) (fileStat.st_size / PAGE_SIZE) + 1;
   }
 
-  void *mem = mmap(NULL, RESULTS_MEMORY_SIZE + sizeof(worker_t) * numWorkers, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  void *mem = mmap(NULL, RESULTS_MEMORY_SIZE + sizeof(Worker) * numWorkers, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   Results *results = mem;
   setup_results(results);
 
   mem += RESULTS_MEMORY_SIZE;
 
-  worker_t *workers = mem;
+  Worker *workers = mem;
   prep_workers(workers, numWorkers, warmup, fd, &fileStat);
 
   TIMER_RESET();
@@ -313,7 +313,7 @@ int main(int argc, char** argv) {
   return 0;
 }
 
-void prep_workers(worker_t *workers, int numWorkers, bool warmup, int fd, struct stat *fileStat) {
+void prep_workers(Worker *workers, int numWorkers, bool warmup, int fd, struct stat *fileStat) {
   cpu_set_t cpuset;
   CPU_ZERO(&cpuset);
   sched_getaffinity(0, sizeof(cpu_set_t), &cpuset);
@@ -332,7 +332,7 @@ void prep_workers(worker_t *workers, int numWorkers, bool warmup, int fd, struct
       cpu++;
     }
 
-    worker_t *w = workers + i;
+    Worker *w = workers + i;
     w->workerId = i;
     w->cpuId = cpu++;
     w->fd = fd;
@@ -408,7 +408,7 @@ void merge(Results * restrict dst, Results * restrict src) {
   }
 }
 
-void process(int id, worker_t * workers, int numWorkers, int fdOut, Results *out) {
+void process(int id, Worker * workers, int numWorkers, int fdOut, Results *out) {
   TIMER_INIT();
 
   int max_k = 8;
@@ -571,7 +571,7 @@ void convert_hash_to_results(hash_t * restrict hash, Results * restrict out) {
 }
 
 
-void start_worker(worker_t *w, Results *out) {
+void start_worker(Worker *w, Results *out) {
   TIMER_INIT();
 
   // 4k pages at the front for the offsets, 2MB pagesfor the everything else
@@ -598,7 +598,7 @@ void start_worker(worker_t *w, Results *out) {
   void * hashedCitiesLong = hashData;
   hashData += HASHED_CITIES_LONG_SIZE;
 
-  hash_t hash = {{packedOffsets, hashedCities, hashedStorage, hashedCitiesLong}, {0 ,0}};
+  hash_t hash = {{packedOffsets, hashedCities, hashedStorage, hashedCitiesLong}, {0, 0}};
 
   void * const data = mmap(NULL, MMAP_DATA_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 
@@ -617,7 +617,7 @@ void start_worker(worker_t *w, Results *out) {
     unsigned int chunk_size = (unsigned int)(end - start);
     unsigned int mapped_file_length = last ? PAGE_CEIL(chunk_size) : chunk_size + PAGE_SIZE;
 
-    mmap(data + DUMMY_SIZE, mapped_file_length, PROT_READ, MAP_PRIVATE | MAP_FIXED , w->fd, start);
+    mmap(data + DUMMY_SIZE, mapped_file_length, PROT_READ, MAP_PRIVATE | MAP_FIXED, w->fd, start);
 
     if (DEBUG && w->warmup) {
       long dummy = 0;
