@@ -1198,17 +1198,17 @@ __attribute__((always_inline)) inline bool city_is_long(PackedCity city) {
 }
 
 void print256(__m256i var) {
-    char val[32];
-    memcpy(val, &var, sizeof(val));
-    fprintf(
-      stderr,
-      "%02x %02x %02x %02x  %02x %02x %02x %02x | %02x %02x %02x %02x  %02x %02x %02x %02x | %02x %02x %02x %02x  %02x %02x %02x %02x | %02x %02x %02x %02x  %02x %02x %02x %02x\n",
-      0xFF &  val[0],  0xFF & val[1],  0xFF & val[2],  0xFF & val[3],
-      0xFF &  val[4],  0xFF & val[5],  0xFF & val[6],  0xFF & val[7],
-      0xFF &  val[8],  0xFF & val[9], 0xFF & val[10], 0xFF & val[11],
-      0xFF & val[12], 0xFF & val[13], 0xFF & val[14], 0xFF & val[15],
-      0xFF & val[16], 0xFF & val[17], 0xFF & val[18], 0xFF & val[19],
-      0xFF & val[20], 0xFF & val[21], 0xFF & val[22], 0xFF & val[23],
-      0xFF & val[24], 0xFF & val[25], 0xFF & val[26], 0xFF & val[27],
-      0xFF & val[28], 0xFF & val[29], 0xFF & val[30], 0xFF & val[31]);
+  uint8_t val[32];
+  memcpy(val, &var, sizeof(val));
+  fprintf(
+    stderr,
+    "%02x %02x %02x %02x  %02x %02x %02x %02x | %02x %02x %02x %02x  %02x %02x %02x %02x | %02x %02x %02x %02x  %02x %02x %02x %02x | %02x %02x %02x %02x  %02x %02x %02x %02x\n",
+    0xFF &  val[0], 0xFF &  val[1], 0xFF &  val[2], 0xFF &  val[3],
+    0xFF &  val[4], 0xFF &  val[5], 0xFF &  val[6], 0xFF &  val[7],
+    0xFF &  val[8], 0xFF &  val[9], 0xFF & val[10], 0xFF & val[11],
+    0xFF & val[12], 0xFF & val[13], 0xFF & val[14], 0xFF & val[15],
+    0xFF & val[16], 0xFF & val[17], 0xFF & val[18], 0xFF & val[19],
+    0xFF & val[20], 0xFF & val[21], 0xFF & val[22], 0xFF & val[23],
+    0xFF & val[24], 0xFF & val[25], 0xFF & val[26], 0xFF & val[27],
+    0xFF & val[28], 0xFF & val[29], 0xFF & val[30], 0xFF & val[31]);
 }
