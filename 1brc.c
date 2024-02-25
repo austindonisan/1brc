@@ -557,9 +557,6 @@ void convert_hash_to_results(Hash * restrict hash, Results * restrict out) {
     }
 
     offset = (offset >> (HASH_SHIFT - HASH_RESULT_SHIFT)) & HASH_RESULT_MASK;
-    if (offset / SHORT_CITY_LENGTH * SHORT_CITY_LENGTH != offset) {
-      fprintf(stderr, "nooo: %d\n", offset);
-    }
     while (1) {
       if (_mm256_testz_si256(out->rows[offset / SHORT_CITY_LENGTH].city.reg, out->rows[offset / SHORT_CITY_LENGTH].city.reg)) {
         out->rows[offset / SHORT_CITY_LENGTH] = (ResultsRow) {city, sum, count, min, max};
