@@ -241,13 +241,17 @@ void print256(__m256i var);
 
 #define LONG_CITY_SENTINEL 0xFACADE00
 
-alignas(32) const void * const MASKED_DUMMY = (long []){
+alignas(32) const long MASKED_DUMMY_DATA[] = {
   'A' << 8 | 'D' << 16, 0, 0, 0
 };
 
-alignas(64) const void * const CITY_MASK = (long []){
-  -1, -1, -1, -1, 0, 0, 0, 0,
+const void * const MASKED_DUMMY = MASKED_DUMMY_DATA;
+
+alignas(64) const long CITY_MASK_DATA[] = {
+    -1, -1, -1, -1, 0, 0, 0, 0,
 };
+
+const void * const CITY_MASK = CITY_MASK_DATA;
 
 int main(int argc, char** argv) {
   TIMER_INIT();
