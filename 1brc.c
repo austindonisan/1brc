@@ -827,8 +827,8 @@ __attribute__((aligned(4096))) void process_chunk(const void * const restrict ba
     // convert ascii to numbers, hide '.' with saturation
     __m256i numbers = _mm256_subs_epu8(nums_blended, _mm256_set1_epi8('0'));
 
-    __m256i mulled = _mm256_madd_epi16(numbers, _mm256_set1_epi32(0x0001640a));
-    // 5 cycle stall
+    __m256i mulled = _mm256_maddubs_epi16(numbers, _mm256_set1_epi32(0x01000a64));
+    mulled = _mm256_madd_epi16(mulled, _mm256_set1_epi32(0x00010001));
 
     // store start of next line
     starts_v = _mm256_add_epi32(starts_v, minus_mask_shift);
@@ -838,8 +838,6 @@ __attribute__((aligned(4096))) void process_chunk(const void * const restrict ba
     atEndMask = _mm256_cmpeq_epi32(starts_v, ends_v);
     checkFinished = !_mm256_testz_si256(atEndMask, atEndMask);
 
-    mulled = _mm256_slli_epi32(mulled, 14);
-    mulled = _mm256_srli_epi32(mulled, 22);
     __m256i final = _mm256_sign_epi32(mulled, minus_mask);
 
     // scale+offset the hashs in the store/load to avoid register intermediates
