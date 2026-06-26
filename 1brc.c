@@ -877,10 +877,6 @@ __attribute__((aligned(4096))) void process_chunk(const void * const restrict ba
     __m256i abef_high = _mm256_unpackhi_epi64(ae, bf);
     __m256i cdgh_high = _mm256_unpackhi_epi64(cg, dh);
 
-    __m256i negfinal = _mm256_sub_epi32(_mm256_setzero_si256(), final);
-    __m256i abef_minmax = _mm256_unpacklo_epi32(final, negfinal);
-    __m256i cdgh_minmax = _mm256_unpackhi_epi32(final, negfinal);
-
     // shift and zero extend
     __m256i abef_shift = _mm256_set_epi64x(0x0707070707060504, 0x0303030303020100, 0x0707070707060504, 0x0303030303020100);
     __m256i final_abef = _mm256_shuffle_epi8(final, abef_shift);
@@ -894,6 +890,10 @@ __attribute__((aligned(4096))) void process_chunk(const void * const restrict ba
 
     __m256i new_cdgh_low = _mm256_add_epi64(cdgh_low, final_cdgh);
     new_cdgh_low = _mm256_add_epi64(new_cdgh_low, inc);
+
+    __m256i negfinal = _mm256_sub_epi32(_mm256_setzero_si256(), final);
+    __m256i abef_minmax = _mm256_unpacklo_epi32(final, negfinal);
+    __m256i cdgh_minmax = _mm256_unpackhi_epi32(final, negfinal);
 
     __m256i new_abef_high = _mm256_min_epi32(abef_minmax, abef_high);
     __m256i new_cdgh_high = _mm256_min_epi32(cdgh_minmax, cdgh_high);
