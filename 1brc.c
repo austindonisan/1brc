@@ -54,12 +54,6 @@
 #define STRIDE 8
 
 typedef struct {
-  int64_t packedSum;
-  int32_t min;
-  int32_t negmax;
-} HashEntry;
-
-typedef struct {
   int * const restrict packedOffsets;
   void * const restrict hashedCities;
   void * const restrict hashedStorage;
@@ -92,7 +86,7 @@ typedef struct {
   int64_t packedSumCount;
   int32_t min;
   int32_t negmax;
-} HashRow;
+} HashEntry;
 
 typedef struct {
   int32_t sentinel;
@@ -538,18 +532,18 @@ void convert_hash_to_results(Hash * restrict hash, Results * restrict out) {
   for (int i = 0; i < hash->counts.numCities; i++) {
     int offset = hash->p.packedOffsets[i];
     PackedCity city = { .reg = _mm256_load_si256(hash->p.hashedCities + offset)};
-    HashRow *rows = hash->p.hashedStorage + offset * (HASH_ENTRY_SIZE / SHORT_CITY_LENGTH);
+    HashEntry *entries = hash->p.hashedStorage + offset * (HASH_ENTRY_SIZE / SHORT_CITY_LENGTH);
 
-    long sum   = EXTRACT_SUM(rows[0].packedSumCount);
-    int count  = EXTRACT_COUNT(rows[0].packedSumCount);
-    int min    = rows[0].min;
-    int negmax = rows[0].negmax;
+    long sum   = EXTRACT_SUM(entries[0].packedSumCount);
+    int count  = EXTRACT_COUNT(entries[0].packedSumCount);
+    int min    = entries[0].min;
+    int negmax = entries[0].negmax;
 
     for (int i = 1; i < STRIDE; i++) {
-      sum +=  EXTRACT_SUM(rows[i].packedSumCount);
-      count +=  EXTRACT_COUNT(rows[i].packedSumCount);
-      min = MIN(min, rows[i].min);
-      negmax = MIN(negmax, rows[i].negmax);
+      sum +=  EXTRACT_SUM(entries[i].packedSumCount);
+      count +=  EXTRACT_COUNT(entries[i].packedSumCount);
+      min = MIN(min, entries[i].min);
+      negmax = MIN(negmax, entries[i].negmax);
     }
 
     if (unlikely(city_is_long(city))) {
