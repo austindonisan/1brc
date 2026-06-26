@@ -56,7 +56,7 @@
 typedef struct {
   int64_t packedSum;
   int32_t min;
-  int32_t max;
+  int32_t negmax;
 } HashEntry;
 
 typedef struct {
@@ -91,7 +91,7 @@ typedef struct {
 typedef struct {
   int64_t packedSumCount;
   int32_t min;
-  int32_t max;
+  int32_t negmax;
 } HashRow;
 
 typedef struct {
@@ -540,16 +540,16 @@ void convert_hash_to_results(Hash * restrict hash, Results * restrict out) {
     PackedCity city = { .reg = _mm256_load_si256(hash->p.hashedCities + offset)};
     HashRow *rows = hash->p.hashedStorage + offset * (HASH_ENTRY_SIZE / SHORT_CITY_LENGTH);
 
-    long sum  = EXTRACT_SUM(rows[0].packedSumCount);
-    int count = EXTRACT_COUNT(rows[0].packedSumCount);
-    int min   = rows[0].min;
-    int max   = rows[0].max;
+    long sum   = EXTRACT_SUM(rows[0].packedSumCount);
+    int count  = EXTRACT_COUNT(rows[0].packedSumCount);
+    int min    = rows[0].min;
+    int negmax = rows[0].negmax;
 
     for (int i = 1; i < STRIDE; i++) {
       sum +=  EXTRACT_SUM(rows[i].packedSumCount);
       count +=  EXTRACT_COUNT(rows[i].packedSumCount);
       min = MIN(min, rows[i].min);
-      max = MAX(max, rows[i].max);
+      negmax = MIN(negmax, rows[i].negmax);
     }
 
     if (unlikely(city_is_long(city))) {
@@ -563,7 +563,7 @@ void convert_hash_to_results(Hash * restrict hash, Results * restrict out) {
     offset = (offset >> (HASH_SHIFT - HASH_RESULT_SHIFT)) & HASH_RESULT_MASK;
     while (1) {
       if (_mm256_testz_si256(out->rows[offset / SHORT_CITY_LENGTH].city.reg, out->rows[offset / SHORT_CITY_LENGTH].city.reg)) {
-        out->rows[offset / SHORT_CITY_LENGTH] = (ResultsRow) {city, sum, count, min, max};
+        out->rows[offset / SHORT_CITY_LENGTH] = (ResultsRow) {city, sum, count, min, -negmax};
         break;
       }
       offset += SHORT_CITY_LENGTH;
@@ -874,12 +874,12 @@ __attribute__((aligned(4096))) void process_chunk(const void * const restrict ba
     __m256i abef_low = _mm256_unpacklo_epi64(ae, bf);
     __m256i cdgh_low = _mm256_unpacklo_epi64(cg, dh);
 
-    // A3 B3 A4 B4 | E3 F3 E4 F4
-    __m256i abef_high = _mm256_unpackhi_epi32(ae, bf);
-    __m256i cdgh_high = _mm256_unpackhi_epi32(cg, dh);
+    __m256i abef_high = _mm256_unpackhi_epi64(ae, bf);
+    __m256i cdgh_high = _mm256_unpackhi_epi64(cg, dh);
 
-    __m256i mins = _mm256_unpacklo_epi64(abef_high, cdgh_high);
-    __m256i maxs = _mm256_unpackhi_epi64(abef_high, cdgh_high);
+    __m256i negfinal = _mm256_sub_epi32(_mm256_setzero_si256(), final);
+    __m256i abef_minmax = _mm256_unpacklo_epi32(final, negfinal);
+    __m256i cdgh_minmax = _mm256_unpackhi_epi32(final, negfinal);
 
     // shift and zero extend
     __m256i abef_shift = _mm256_set_epi64x(0x0707070707060504, 0x0303030303020100, 0x0707070707060504, 0x0303030303020100);
@@ -895,13 +895,8 @@ __attribute__((aligned(4096))) void process_chunk(const void * const restrict ba
     __m256i new_cdgh_low = _mm256_add_epi64(cdgh_low, final_cdgh);
     new_cdgh_low = _mm256_add_epi64(new_cdgh_low, inc);
 
-    __m256i new_mins = _mm256_min_epi32(mins, final);
-    __m256i new_maxs = _mm256_max_epi32(maxs, final);
-
-
-    // A3 A4 B3 B4 | E3 E4 F3 F4
-    __m256i new_abef_high = _mm256_unpacklo_epi32(new_mins, new_maxs);
-    __m256i new_cdgh_high = _mm256_unpackhi_epi32(new_mins, new_maxs);
+    __m256i new_abef_high = _mm256_min_epi32(abef_minmax, abef_high);
+    __m256i new_cdgh_high = _mm256_min_epi32(cdgh_minmax, cdgh_high);
 
     __m256i new_ae = _mm256_unpacklo_epi64(new_abef_low, new_abef_high);
     __m256i new_bf = _mm256_unpackhi_epi64(new_abef_low, new_abef_high);
@@ -1007,8 +1002,8 @@ __attribute__((always_inline)) inline long insert_city(Hash * restrict h, long h
       h->p.packedOffsets[h->counts.numCities] = hash;
       h->counts.numCities += 1;
 
-      __m256i initData = _mm256_set_epi32(MIN_TEMP, MAX_TEMP, SUM_SIGN_BIT >> 32, 0,
-                                          MIN_TEMP, MAX_TEMP, SUM_SIGN_BIT >> 32, 0);
+      __m256i initData = _mm256_set_epi32(-MIN_TEMP, MAX_TEMP, SUM_SIGN_BIT >> 32, 0,
+                                          -MIN_TEMP, MAX_TEMP, SUM_SIGN_BIT >> 32, 0);
       _mm256_store_si256(h->p.hashedStorage + 4*hash +  0, initData);
       _mm256_store_si256(h->p.hashedStorage + 4*hash + 32, initData);
       _mm256_store_si256(h->p.hashedStorage + 4*hash + 64, initData);
