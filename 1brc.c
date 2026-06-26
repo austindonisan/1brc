@@ -655,6 +655,7 @@ __attribute__((aligned(4096))) void process_chunk(const void * const restrict ba
   alignas(64) Hash hash = *hashOut;
   alignas(64) uint64_t nums[STRIDE];
   alignas(32) uint32_t starts[STRIDE];
+  alignas(32) uint32_t cityHashes[STRIDE];
   bool checkFinished;
 
   __m256i starts_v = _mm256_loadu_si256((__m256i *)offsets);
@@ -772,6 +773,7 @@ __attribute__((aligned(4096))) void process_chunk(const void * const restrict ba
     }
 
     __m256i city_hashes = hash_cities(maskedCity0, maskedCity1, maskedCity2, maskedCity3, maskedCity4, maskedCity5, maskedCity6, maskedCity7);
+   _mm256_store_si256((__m256i *)cityHashes, city_hashes);
 
     starts_v = _mm256_add_epi32(starts_v, semicolons_v);
 
@@ -842,28 +844,28 @@ __attribute__((aligned(4096))) void process_chunk(const void * const restrict ba
 
     // scale+offset the hashs in the store/load to avoid register intermediates
     // long instead of int to advoid unecessary sign extends
-    long hash0 = insert_city(&hash, _mm256_extract_epi32(city_hashes, 0), maskedCity0);
+    long hash0 = insert_city(&hash, cityHashes[0], maskedCity0);
     __m128i vals0 = _mm_load_si128(hash.p.hashedStorage + 4*hash0 + 16*0);
 
-    long hash4 = insert_city(&hash, _mm256_extract_epi32(city_hashes, 2), maskedCity4);
+    long hash4 = insert_city(&hash, cityHashes[2], maskedCity4);
     __m128i vals4 = _mm_load_si128(hash.p.hashedStorage + 4*hash4 + 16*4);
 
-    long hash1 = insert_city(&hash, _mm256_extract_epi32(city_hashes, 4), maskedCity1);
+    long hash1 = insert_city(&hash, cityHashes[4], maskedCity1);
     __m128i vals1 = _mm_load_si128(hash.p.hashedStorage + 4*hash1 + 16*1);
 
-    long hash5 = insert_city(&hash, _mm256_extract_epi32(city_hashes, 6), maskedCity5);
+    long hash5 = insert_city(&hash, cityHashes[6], maskedCity5);
     __m128i vals5 = _mm_load_si128(hash.p.hashedStorage + 4*hash5 + 16*5);
 
-    long hash2 = insert_city(&hash, _mm256_extract_epi32(city_hashes, 1), maskedCity2);
+    long hash2 = insert_city(&hash, cityHashes[1], maskedCity2);
     __m128i vals2 = _mm_load_si128(hash.p.hashedStorage + 4*hash2 + 16*2);
 
-    long hash6 = insert_city(&hash, _mm256_extract_epi32(city_hashes, 3), maskedCity6);
+    long hash6 = insert_city(&hash, cityHashes[3], maskedCity6);
     __m128i vals6 = _mm_load_si128(hash.p.hashedStorage + 4*hash6 + 16*6);
 
-    long hash3 = insert_city(&hash, _mm256_extract_epi32(city_hashes, 5), maskedCity3);
+    long hash3 = insert_city(&hash, cityHashes[5], maskedCity3);
     __m128i vals3 = _mm_load_si128(hash.p.hashedStorage + 4*hash3 + 16*3);
 
-    long hash7 = insert_city(&hash, _mm256_extract_epi32(city_hashes, 7), maskedCity7);
+    long hash7 = insert_city(&hash, cityHashes[7], maskedCity7);
     __m128i vals7 = _mm_load_si128(hash.p.hashedStorage + 4*hash7 + 16*7);
 
     __m256i ae = _mm256_set_m128i(vals4, vals0);
