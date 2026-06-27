@@ -217,9 +217,7 @@ int hash_long(long x, long y);
 
 /* Insertion */
 inline long insert_city(Hash * restrict h, long hash, const __m256i maskedCity);
-int insert_city_long1(Hash * restrict h, int hash, __m256i seg0, __m256i seg1);
-int insert_city_long2(Hash * restrict h, int hash, __m256i seg0, __m256i seg1, __m256i seg2);
-int insert_city_long3(Hash * restrict h, int hash, __m256i seg0, __m256i seg1, __m256i seg2, __m256i seg3);
+int insert_city_long(Hash * restrict h, int hash, __m256i seg0, __m256i seg1, __m256i seg2, __m256i seg3);
 
 /* Reduction / output */
 void convert_hash_to_results(Hash * restrict hash, Results * restrict out);
@@ -377,6 +375,11 @@ alignas(64) const long CITY_MASK_DATA[] = {
 };
 const void * const CITY_MASK = CITY_MASK_DATA;
 
+/* 128x0xFF then 0x00 padding. Loading 32B at (LONG_CITY_MASK + 128 - p + 32*k)
+ * gives segment k's mask when the name occupies its first p bytes (p in [32,128]). */
+alignas(64) const uint8_t LONG_CITY_MASK_DATA[288] = { [0 ... 127] = 0xFF };
+const void * const LONG_CITY_MASK = LONG_CITY_MASK_DATA;
+
 /* ========================================================================== *
  *  main
  * ========================================================================== */
@@ -530,7 +533,7 @@ void setup_results(Results *r) {
 void process(int id, Worker *workers, int numWorkers, int fdOut, Results *out) {
   TIMER_INIT();
 
-  const int max_k = 8;
+  const int max_k = 16;
   const bool doWork = numWorkers <= max_k;      /* children will be leaves, not interior nodes */
   const int k = doWork ? numWorkers : (numWorkers + (max_k - 1)) / max_k;
 
@@ -1097,34 +1100,26 @@ __m256i process_long(const void * const restrict start, Hash * restrict h, int *
   __m256i seg3 = _mm256_loadu_si256(start + 96);
 
   __m256i semicolons = _mm256_set1_epi8(';');
-  int semicolonBytes1 = _tzcnt_u32(_mm256_movemask_epi8(_mm256_cmpeq_epi8(seg1, semicolons)));
-  int semicolonBytes2 = _tzcnt_u32(_mm256_movemask_epi8(_mm256_cmpeq_epi8(seg2, semicolons)));
-  int semicolonBytes3 = _tzcnt_u32(_mm256_movemask_epi8(_mm256_cmpeq_epi8(seg3, semicolons)));
+  int s1 = _tzcnt_u32(_mm256_movemask_epi8(_mm256_cmpeq_epi8(seg1, semicolons)));
+  int s2 = _tzcnt_u32(_mm256_movemask_epi8(_mm256_cmpeq_epi8(seg2, semicolons)));
+  int s3 = _tzcnt_u32(_mm256_movemask_epi8(_mm256_cmpeq_epi8(seg3, semicolons)));
 
-  /* only hash the first 16 bytes, longer doesn't have any benefits */
+  /* Absolute ';' offset within the 128-byte window. Evaluated low-to-high so the
+   * earliest segment with a ';' wins; both ternaries lower to cmov. */
+  int p = 96 + s3;
+  p = (s2 < 32) ? 64 + s2 : p;
+  p = (s1 < 32) ? 32 + s1 : p;
+  *semicolonBytesOut = p;
+
+  /* One mask spanning all four segments: keep [0, p), zero the rest. */
+  int o = 128 - p;
+  seg0 = _mm256_and_si256(seg0, _mm256_loadu_si256(LONG_CITY_MASK + o +  0));
+  seg1 = _mm256_and_si256(seg1, _mm256_loadu_si256(LONG_CITY_MASK + o + 32));
+  seg2 = _mm256_and_si256(seg2, _mm256_loadu_si256(LONG_CITY_MASK + o + 64));
+  seg3 = _mm256_and_si256(seg3, _mm256_loadu_si256(LONG_CITY_MASK + o + 96));
+
   int hash = hash_long(*(long *)start, *((long *)start + 1));
-
-  /* The ';' is in segment 1, 2, or 3. Mask the final segment, then insert with
-   * the matching arity. *semicolonBytesOut is the absolute offset from start. */
-  if (semicolonBytes1 < 32) {
-    *semicolonBytesOut = 32 + semicolonBytes1;
-    __m256i mask = _mm256_loadu_si256(CITY_MASK + 32 - semicolonBytes1);
-    seg1 = _mm256_and_si256(seg1, mask);
-    hash = insert_city_long1(h, hash, seg0, seg1);
-  }
-  else if (semicolonBytes2 < 32) {
-    *semicolonBytesOut = 64 + semicolonBytes2;
-    __m256i mask = _mm256_loadu_si256(CITY_MASK + 32 - semicolonBytes2);
-    seg2 = _mm256_and_si256(seg2, mask);
-    hash = insert_city_long2(h, hash, seg0, seg1, seg2);
-  }
-  else {
-    *semicolonBytesOut = 96 + semicolonBytes3;
-    __m256i mask = _mm256_loadu_si256(CITY_MASK + 32 - semicolonBytes3);
-    seg3 = _mm256_and_si256(seg3, mask);
-    hash = insert_city_long3(h, hash, seg0, seg1, seg2, seg3);
-  }
-
+  hash = insert_city_long(h, hash, seg0, seg1, seg2, seg3);
   return city_from_long_hash(hash);
 }
 
@@ -1208,57 +1203,9 @@ __attribute__((always_inline)) inline long insert_city(Hash * restrict h, long h
   }
 }
 
-/* Long-city insert variants: 2, 3, or 4 segments of the name are significant
- * (the rest is zeroed by the caller's mask). Each probes the long-city table by
- * full-name comparison and inserts on the first empty slot. */
-int insert_city_long1(Hash * restrict hash, int hash_value, __m256i seg0, __m256i seg1) {
-  while (1) {
-    __m256i stored0 = _mm256_loadu_si256(hash->p.hashedCitiesLong + hash_value +  0);
-    __m256i stored1 = _mm256_loadu_si256(hash->p.hashedCitiesLong + hash_value + 32);
-    __m256i xor0 = _mm256_xor_si256(stored0, seg0);
-    __m256i xor1 = _mm256_xor_si256(stored1, seg1);
-
-    if (_mm256_testz_si256(xor0, xor0) && _mm256_testz_si256(xor1, xor1)) {
-      return hash_value;
-    }
-
-    if (_mm256_testz_si256(stored0, stored0)) {
-      _mm256_store_si256(hash->p.hashedCitiesLong + hash_value +  0, seg0);
-      _mm256_store_si256(hash->p.hashedCitiesLong + hash_value + 32, seg1);
-      hash->counts.numCitiesLong++;
-      return hash_value;
-    }
-    hash_value += LONG_CITY_LENGTH;
-    hash_value &= HASH_LONG_MASK;
-  }
-}
-
-int insert_city_long2(Hash * restrict hash, int hash_value, __m256i seg0, __m256i seg1, __m256i seg2) {
-  while (1) {
-    __m256i stored0 = _mm256_loadu_si256(hash->p.hashedCitiesLong + hash_value +  0);
-    __m256i stored1 = _mm256_loadu_si256(hash->p.hashedCitiesLong + hash_value + 32);
-    __m256i stored2 = _mm256_loadu_si256(hash->p.hashedCitiesLong + hash_value + 64);
-    __m256i xor0 = _mm256_xor_si256(stored0, seg0);
-    __m256i xor1 = _mm256_xor_si256(stored1, seg1);
-    __m256i xor2 = _mm256_xor_si256(stored2, seg2);
-
-    if (_mm256_testz_si256(xor0, xor0) && _mm256_testz_si256(xor1, xor1) && _mm256_testz_si256(xor2, xor2)) {
-      return hash_value;
-    }
-
-    if (_mm256_testz_si256(stored0, stored0)) {
-      _mm256_store_si256(hash->p.hashedCitiesLong + hash_value +  0, seg0);
-      _mm256_store_si256(hash->p.hashedCitiesLong + hash_value + 32, seg1);
-      _mm256_store_si256(hash->p.hashedCitiesLong + hash_value + 64, seg2);
-      hash->counts.numCitiesLong++;
-      return hash_value;
-    }
-    hash_value += LONG_CITY_LENGTH;
-    hash_value &= HASH_LONG_MASK;
-  }
-}
-
-int insert_city_long3(Hash * restrict hash, int hash_value, __m256i seg0, __m256i seg1, __m256i seg2, __m256i seg3) {
+/* Long-city insert variant. Probe the long-city table by full-name comparison
+ * and insert on the first empty slot. */
+int insert_city_long(Hash * restrict hash, int hash_value, __m256i seg0, __m256i seg1, __m256i seg2, __m256i seg3) {
   while (1) {
     __m256i stored0 = _mm256_loadu_si256(hash->p.hashedCitiesLong + hash_value +  0);
     __m256i stored1 = _mm256_loadu_si256(hash->p.hashedCitiesLong + hash_value + 32);
