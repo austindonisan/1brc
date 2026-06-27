@@ -1437,7 +1437,7 @@ int sort_result(const void *a, const void *b, void *arg) {
 /* Emit "{city=min/mean/max, ...}\n". Stats are in tenths; mean is rounded to one
  * decimal. (One big buffer + a single fputs keeps I/O time minimal.) */
 void print_results(Results *results) {
-  char *buffer = malloc(MAX_CITIES * 150);
+  char *buffer = calloc(MAX_CITIES, 150);
 
   int pos = 0;
   buffer[pos++] = '{';
@@ -1458,7 +1458,7 @@ void print_results(Results *results) {
     else {
       bytes = row.city.shortCity.bytes;
     }
-    pos += sprintf(buffer + pos, "%s=%.1f/%.1f/%.1f", bytes, min, round(sum/count) * 0.1, max);
+    pos += snprintf(buffer + pos, MAX_CITIES * 150 - pos, "%s=%.1f/%.1f/%.1f", bytes, min, round(sum/count) * 0.1, max);
 
     if (i != results->numCities - 1) {
       buffer[pos++] = ',';
