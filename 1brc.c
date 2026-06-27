@@ -1393,10 +1393,10 @@ void print_results(Results *results) {
     ResultsRef ref = results->refs[i];
     ResultsRow row = results->rows[ref.offset / SHORT_CITY_LENGTH];
 
-    float sum = row.sum;
-    float count = row.count;
-    float min = row.min * 0.1;
-    float max = row.max * 0.1;
+    double sum = row.sum;
+    double count = row.count;
+    double min = row.min * 0.1;
+    double max = row.max * 0.1;
 
     const char *bytes;
     if (unlikely(city_is_long(row.city))) {
